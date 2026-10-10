@@ -1,0 +1,20 @@
+# Internal planning docs, not published
+internal_docs/
+
+# Upstream and reference checkouts (Fulcrum upstream, privkeyio's BLAKE2b fork, the packages)
+vendor/
+
+# The StartOS packaging workspace; the package is its own repository inside it
+packaging/
+
+# Scratch and test-run state
+spikes/**/data/
+spikes/**/*.log
+spikes/**/*.pid
+*.log
+
+# Build output
+*.s9pk
+build/
+node_modules/
+javascript/
