@@ -5,4 +5,5 @@ scripts/*.js
 docker-images
 node_modules
 javascript/*
-ncc-cachebuilds/
+ncc-cache
+builds/
