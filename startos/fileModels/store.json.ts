@@ -22,5 +22,11 @@ export const storeJson = FileHelper.json(
      * new index, and that one deserves its own "Sync Complete".
      */
     synced: z.array(backendId).catch([]),
+    /**
+     * When an index was last set aside or deleted. Nothing reads the value; writing it makes the
+     * Delete Unused Indexes action, which follows this file, re-evaluate whether it has anything
+     * to offer.
+     */
+    indexesChangedAt: z.number().optional().catch(undefined),
   }),
 )

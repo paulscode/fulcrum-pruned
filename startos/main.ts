@@ -212,6 +212,7 @@ export const main = sdk.setupMain(async ({ effects }) => {
             const moved = cookie ? await guardChain(backend, rpc, cookie) : null
             if (moved) {
               await markUnsynced(effects, backend)
+              await storeJson.merge(effects, { indexesChangedAt: Date.now() })
               syncedNow = false
               await sdk.notification.create(effects, {
                 level: 'warning',
