@@ -11,6 +11,7 @@
 #   CHAIN=sha256  ./setup.sh up     Knots, SHA256 chain
 #   CHAIN=blake2b ./setup.sh up     the BLAKE2b lab build, activation at ACT (default 300)
 #   ./setup.sh fulcrum              (re)start Fulcrum against the proxy, fresh datadir
+#   FULCRUM_NODE=nodeA FULCRUM_BITCOIND_PORT=19101 ./setup.sh fulcrum   ... against the archival node directly (no txindex)
 #   ./setup.sh down | clean
 #
 # Mines 800 blocks with wallet transactions spread through them, prunes B below 500 (B keeps
@@ -104,7 +105,7 @@ start_fulcrum() {
   cat > "$ROOT/fulcrum.conf" <<EOF
 datadir = /w/harness/fulcrum-db
 bitcoind = 127.0.0.1:${FULCRUM_BITCOIND_PORT:-$PROXY_PORT}
-rpccookie = /w/harness/nodeB/regtest/.cookie
+rpccookie = /w/harness/${FULCRUM_NODE:-nodeB}/regtest/.cookie
 tcp = 127.0.0.1:$FULCRUM_TCP
 peering = false
 announce = false

@@ -68,6 +68,33 @@ for t in txs:
 check(bad_raw == 0, f"0002: raw transaction.get for all {len(txs)} (wrong: {bad_raw})")
 check(bad_verbose == 0, f"0002: verbose transaction.get for all {len(txs)} (wrong: {bad_verbose})")
 
+# Verbose fields agree with the node's own answer (asked with the block hash, since the reference
+# node has no txindex either). in_active_chain is added by bitcoind and the proxy alike when a
+# block hash is given, so it is allowed to be present.
+bad_fields = 0
+for t in txs[::7]:
+    want = json.loads(acli('getrawtransaction', t['txid'], 'true', acli('getblockhash', str(t['height']))))
+    got = c.call('blockchain.transaction.get', t['txid'], True)['result']
+    for k in ('txid', 'hash', 'blockhash', 'blocktime', 'hex', 'vin', 'vout'):
+        if got.get(k) != want.get(k):
+            bad_fields += 1; print('  field', k, t['height'])
+check(bad_fields == 0, f'0002: verbose fields match the node for {len(txs[::7])} transactions')
+
+# A coinbase in a pruned block, raw.
+cb_h = 50
+cb = json.loads(acli('getblock', acli('getblockhash', str(cb_h)), '1'))['tx'][0]
+got = c.call('blockchain.transaction.get', cb)
+check(got.get('result') == acli('getrawtransaction', cb, 'false', acli('getblockhash', str(cb_h))),
+      f'0002: coinbase at height {cb_h} (pruned block)')
+
+# A mempool transaction: not in the index, so asked without a hash, which the node answers.
+mtx = acli('-rpcwallet=w', '-named', 'sendtoaddress', 'address=' + acli('-rpcwallet=w', 'getnewaddress'), 'amount=0.01')
+for _ in range(30):
+    got = c.call('blockchain.transaction.get', mtx)
+    if 'result' in got: break
+    time.sleep(1)
+check(got.get('result') == acli('getrawtransaction', mtx), 'mempool transaction (no block hash, served from the mempool)')
+
 # merkle proofs still work for pruned-block transactions (index only, no node involved)
 t0 = txs[0]
 m = c.call('blockchain.transaction.get_merkle', t0['txid'], t0['height'])
