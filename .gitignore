@@ -1,5 +1,6 @@
 # Internal planning docs, not published
 internal_docs/
+references/
 
 # Upstream and reference checkouts (Fulcrum upstream, privkeyio's BLAKE2b fork, the packages)
 vendor/
@@ -18,3 +19,15 @@ spikes/**/*.pid
 build/
 node_modules/
 javascript/
+
+# Patch working tree (a git worktree of vendor/Fulcrum-blake2b, branch `pruned`) and its builds
+spikes/fulcrum-src/
+spikes/build*/
+# Regtest harness state
+spikes/harness/node*/
+spikes/harness/fulcrum-db/
+spikes/harness/fulcrum.conf
+spikes/harness/proxy.toml
+spikes/harness/txs.json
+spikes/harness/chain
+spikes/harness/activation
