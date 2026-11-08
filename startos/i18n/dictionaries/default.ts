@@ -53,10 +53,9 @@ const dict = {
   'Waiting for Bitcoin to provide historical blocks': 49,
   'Fulcrum is catching up: block ${indexed} of ${total} (${percent}%).': 50,
   'Fulcrum is building its address index: ${percent}%, block ${indexed} of ${total}. On a pruned node, blocks it has discarded are fetched from the network one by one, so a first index takes a day or more, and several days over Tor.': 51,
-  'Unknown status': 52,
-  'Sync Complete': 53,
-  'Fulcrum has finished building its address index for ${node}. It is restarting once to apply a lower database memory setting, after which the Electrum server is ready.': 54,
-  'Fulcrum has finished building its address index for ${node}. The Electrum server is ready.': 55,
+  'Sync Complete': 52,
+  'Fulcrum has finished building its address index for ${node}. It is restarting once to apply a lower database memory setting, after which the Electrum server is ready.': 53,
+  'Fulcrum has finished building its address index for ${node}. The Electrum server is ready.': 54,
 }
 
 /**

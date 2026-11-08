@@ -377,7 +377,7 @@ exec Fulcrum --ts-format none /data/fulcrum.conf`,
           }
 
           return {
-            message: lastSyncLog ?? i18n('Unknown status'),
+            message: lastSyncLog ?? i18n('Fulcrum is starting'),
             result: 'loading',
           }
         },
