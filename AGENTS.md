@@ -34,7 +34,30 @@ verified, tried, and decided belongs in the commit message and the PR body.
 
 ## This repo
 
-- **Prefill the Configure form with only the keys its spec declares — never spread the whole config.** `fulcrum.conf`'s `banner` key is the _path_ to `banner.txt`, so a spread puts that path in the textarea and the next save writes it into the banner.
-- **`main` must `const` the config _after_ writing `bitcoind` into it**, or that write registers as a change and the daemon restarts itself on every start.
-- **`peering` and `announce` stay pinned false** — either would advertise this server to the public Electrum network.
-- **The bitcoind version range is a Knots-flavor floor, unlike Start9's per-major Core ranges.** Merging Start9's `dependencies.ts` brings back Core lines that never serve extended headers, so keep `>=#knots:...` when resolving it.
+Fulcrum Pruned: privkeyio's BLAKE2b Fulcrum plus `patches/`, packaged to index a **pruned** node
+on either chain, chosen with Select Node. Forked from privkeyio/fulcrum-startos `v2.1.4-blake_0`
+(remote `privkeyio`). The project folder `/mnt/Black/fulcrum-pruned` holds the plan, the patch
+working tree and the regtest harness.
+
+- **No autoconfig task, ever.** No prune, txindex or ZeroMQ requirement: that is the point of the
+  package. If you want one, the bug is elsewhere.
+- **The image is the repo-root `Dockerfile`, not `fulcrum/contrib/docker/Dockerfile`.** Only the
+  root one sees `patches/`. Regenerate `patches/` with `git format-patch`; never hand-edit them.
+- **One database per node, `/data/db/<node id>`.** Do not share or trim one across nodes: Fulcrum
+  cannot rewind across the BLAKE2b split. Anything that names the database (Reindex, the
+  unreadable-index recovery, Delete Unused Indexes, backups) must stay per node.
+- **Version floors follow the node's proxy, not `peer-local`** (`backends.ts`). Check every range
+  with the SDK's comparator; flavored versions never match unflavored ranges.
+- **Keep `utils.ts`'s `mainHostId` and `electrumPort`, and the health ids `primary` and
+  `sync-progress`.** Dependents import and gate on them.
+- **Prefill the Configure form with only the keys its spec declares; never spread the whole config.**
+  `fulcrum.conf`'s `banner` key is the _path_ to `banner.txt`.
+- **`main` must `const` the config _after_ writing `bitcoind`, `datadir` and `rpccookie`**, or
+  that write registers as a change and the daemon restarts itself on every start.
+- **`peering` and `announce` stay pinned false.**
+- **Never run `npm install`/`npm update`.** `npm ci` installs exactly the lockfile. A new
+  dependency's lock entry is copied by hand from a sibling package.
+- **i18n is en_US only**, so `gen-i18n-dict.py` (in the workspace) may regenerate `default.ts`.
+  Once `translations.ts` has entries, the indices are the join key and must be kept.
+- **Build with the workspace's `release.sh`** (`../release.sh fulcrum-pruned-startos --arch x86`
+  for iteration), which refuses an `osVersion` below 0.4.0.2. Releases are local, never CI.

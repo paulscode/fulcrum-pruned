@@ -1,0 +1,45 @@
+From 8f1589a2f7e4d31ed8595c957a6387b6cbf49c52 Mon Sep 17 00:00:00 2001
+From: Paul Lamb <paul@paulscode.com>
+Date: Sun, 8 Nov 2026 14:43:13 -0600
+Subject: [PATCH 5/5] RPC: accept a bitcoind reply with no content-type
+
+HttpConnection required both content-type and content-length and
+dropped the connection when either was missing. btc-rpc-proxy, which a
+pruned node puts in front of its RPC port, sends content-type on the
+replies it passes through from bitcoind but not on the ones it builds
+itself, and those are exactly the blocks and transactions it fetches from
+peers because the node has pruned them. So every pruned block fetch tore
+down the RPC connection, and Fulcrum never got past the prune height.
+
+Seen in every proxy tag through v0.8.2-blake2b.2. Content-length is still
+required, since it frames the body. A missing content-type is taken as
+JSON; the body is parsed as JSON regardless, so anything else still fails
+there. A content-type other than application/json is still logged as
+before.
+---
+ src/RPC.cpp | 10 ++++++++--
+ 1 file changed, 8 insertions(+), 2 deletions(-)
+
+diff --git a/src/RPC.cpp b/src/RPC.cpp
+index 50f9193..f06afa2 100644
+--- a/src/RPC.cpp
++++ b/src/RPC.cpp
+@@ -982,10 +982,16 @@ namespace RPC {
+                     } else {
+                         // caught EMPTY line -- this signifies end of header
+                         // empty line, advance state
+-                        if (sm->contentType.isEmpty() || !sm->gotLength) { // enforce server must send us both content-type and content-length, otherwise throw
++                        if (!sm->gotLength) { // enforce server must send us content-length, otherwise throw
+                             // this is an error condition
+-                            throw Exception("Premature header end; did not receive BOTH content-type and content-length");
++                            throw Exception("Premature header end; did not receive content-length");
+                         }
++                        // A missing content-type is taken to be JSON. btc-rpc-proxy, which a pruned node puts in front of
++                        // its RPC port, omits it on the replies it builds itself, which are exactly the blocks and
++                        // transactions it fetches from peers because the node has pruned them. The body is parsed as
++                        // JSON either way, and a body that is not JSON still fails there.
++                        if (sm->contentType.isEmpty())
++                            TraceM("No content-type in response, assuming application/json");
+                         sm->state = St::READING_CONTENT;
+                     }
+                 } // end if state == St::HEADER

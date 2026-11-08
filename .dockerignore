@@ -1,0 +1,5 @@
+# Only fulcrum/ and patches/ go into the image build.
+*
+!fulcrum
+!patches
+fulcrum/.git

@@ -9,6 +9,11 @@ export const defaultDbMem = () =>
 
 export const syncedDbMem = () => Math.min(512, defaultDbMem())
 
+// Seeded at install, well above Fulcrum's 30 s: on a pruned node a block below the prune
+// height comes from peers through btc-rpc-proxy, which can take longer than that, over Tor
+// especially. A timeout fails the whole download task and restarts it from the database tip.
+export const defaultBitcoindTimeout = 120
+
 // The union's transform output is not revalidated, so without the pipe
 // Number('abc') succeeds as NaN and is written back into the file.
 const iniNumber = z
@@ -18,11 +23,14 @@ const iniNumber = z
   .catch(undefined)
 
 export const shape = z.looseObject({
-  datadir: z.literal('/data').catch('/data'),
+  // Per node: `/data/db/<node id>`, written by main before Fulcrum starts. See utils.ts.
+  datadir: z.string().optional().catch(undefined),
   bitcoind: z.string().optional().catch(undefined),
   rpcuser: z.literal('').catch(''),
   rpcpassword: z.literal('').catch(''),
-  rpccookie: z.literal('/mnt/bitcoind/.cookie').catch('/mnt/bitcoind/.cookie'),
+  // The selected node's cookie, through its volume mounted at /mnt/bitcoind: at the root on
+  // mainnet, in a subdirectory named for the chain otherwise. Written by main.
+  rpccookie: z.string().catch('/mnt/bitcoind/.cookie'),
   tcp: z.literal('0.0.0.0:50001').catch('0.0.0.0:50001'),
   peering: z.literal(false).catch(false),
   announce: z.literal(false).catch(false),

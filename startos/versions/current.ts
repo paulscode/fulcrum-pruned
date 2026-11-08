@@ -1,75 +1,20 @@
-import { IMPOSSIBLE, MigrationOpts, VersionInfo } from '@start9labs/start-sdk'
-import { sdk } from '../sdk'
-import {
-  defaultDbMem,
-  fulcrumConf,
-  syncedDbMem,
-} from '../fileModels/fulcrum.conf'
-import { storeJson } from '../fileModels/store.json'
+import { IMPOSSIBLE, VersionInfo } from '@start9labs/start-sdk'
 
-// The standard build's 2.1.1:13 and 2.1.3:1 steps, which this flavor's earlier releases never ran.
-const catchUpWithStandardBuild = async ({ effects }: MigrationOpts) => {
-  await sdk.action.clearTask(effects, 'bitcoind:other-config')
-  if ((await fulcrumConf.read().once())?.db_mem === undefined) {
-    await fulcrumConf.merge(effects, {
-      db_mem: (await storeJson.read().once())?.syncNotified
-        ? syncedDbMem()
-        : defaultDbMem(),
-    })
-  }
-  await sdk.MultiHost.of(effects, 'electrum').retire()
-}
-
+// The first release: a new package id, so there is no install base to migrate.
 export const current = VersionInfo.of({
-  version: '#blake:2.1.4:0',
+  version: '2.1.4:0',
   releaseNotes: {
-    en_US: `Fulcrum that follows Bitcoin's change of proof-of-work algorithm to BLAKE2b.
+    en_US: `First release of Fulcrum Pruned: Fulcrum 2.1.4 for a pruned Bitcoin node, on the SHA256 or the BLAKE2b chain.
 
-The proof of work changes at an activation height: from that block on, block headers are 164 bytes and hashed with BLAKE2b rather than 80 bytes and SHA256d. History is continuous, so blocks below that height keep their original headers and both forms coexist in one index. The standard build cannot parse the new form and stops at the activation block rather than serving wrong data. This one reads both.
+- Works against a pruned node. Blocks the node has discarded are fetched from the network by the node's btc-rpc-proxy, both while Fulcrum builds its index and when a wallet looks up an old transaction. No txindex, and no prune setting is changed.
+- Select Node chooses which node to index: Bitcoin Knots, Bitcoin Knots (SHA256) Companion, or Bitcoin Knots (BLAKE2b) Companion. Each node keeps its own index, so switching back is immediate. Delete Unused Indexes frees the space of the others.
+- Built on privkeyio's BLAKE2b-aware Fulcrum, with five small patches for pruned nodes. server.features reports which side of the BLAKE2b fork the server follows.
+- Installs alongside Electrs Pruned, with different preferred ports.
 
-## What changed
-
-Builds Fulcrum 2.1.4. Address history lookups now read uncached transaction hashes on a small pool of threads rather than one database read at a time, so a wallet with a long history loads faster.
-
-The server identifies itself as \`Fulcrum 2.1.4+blake2b\`.
-
-Adds a Reindex action, which deletes the address index and rebuilds it from Bitcoin when Fulcrum keeps exiting on a corrupted database, without uninstalling.
-
-While Bitcoin is still downloading the blocks beneath a UTXO snapshot, Sync Progress now says so instead of showing Fulcrum's failure lines.
-
-The unused "electrum" host left over from StartOS 0.3.5 is removed, along with any domain attached to it. Attach domains to Electrum (SSL) instead.
-
-Nothing in the index changes, so this is an ordinary update with no resync.
-
-## Requires Bitcoin Knots
-
-Only Knots schedules the change, so only Knots serves the extended headers this build exists to index. It depends on the Knots flavor of Bitcoin specifically; a standard Bitcoin node no longer satisfies it.
-
-## Switching to this build
-
-This is a flavor of the same package rather than a separate one, so it replaces the standard build in place and keeps its index. The on-disk format is unchanged below the activation height: the headers table keeps the same record size and magic, and only the extended header's 84-byte tail is stored separately, in a table created the first time such a header is seen. Switching therefore does not resync.
-
-## Coming from an earlier release of this package
-
-An index written by an early release of this package padded every header out to 164 bytes and stamped the headers table with its own magic, which neither the standard build nor this one can read. Only that table differed, so such an index is converted on the first start rather than being rebuilt: a chain the length of mainnet converts in seconds against the days a rebuild costs, and the address index, the utxo set and everything else are kept untouched. Should the conversion not complete, the index is discarded and rebuilt rather than leaving the service unable to start.
-
-## Switching back is not offered
-
-Past the activation height the index contains extended headers that the standard build cannot read; it would stop on startup with a magic bytes mismatch and could not be recovered from the interface. Returning to the standard build is therefore blocked. To go back, remove this and reinstall the standard build, which rebuilds its index from scratch.`,
+A first index against an already-pruned node takes a day or more, several days over Tor, and needs about 190 GB of disk.`,
   },
   migrations: {
-    up: catchUpWithStandardBuild,
-    //Refuse the reverse switch. Past the activation height the index holds extended headers the
-    //unflavored build cannot read, so it would fail to start with no way to recover from the UI.
+    up: async () => {},
     down: IMPOSSIBLE,
-    other: {
-      //Arriving from the unflavored build. Its index is readable as-is below the activation height,
-      //so there is no resync.
-      //No `down`: omitting it leaves the reverse switch unavailable, which is what the index requires
-      //past the activation height.
-      ['^2']: {
-        up: catchUpWithStandardBuild,
-      },
-    },
   },
 })

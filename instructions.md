@@ -1,68 +1,58 @@
-# Fulcrum
+# Fulcrum Pruned
 
-## Documentation
+A fast Electrum server that works with a **pruned** Bitcoin node, on either chain: SHA256 or BLAKE2b.
 
-- [Start9 Bitcoin Guides](https://docs.start9.com/bitcoin-guides/) — pointing a wallet at your own Electrum server — certificates, SSL and Tor — which wallets work, and archival versus pruned Bitcoin nodes.
-- [Fulcrum documentation](https://github.com/cculianu/Fulcrum/tree/master/doc) — the upstream documentation covering configuration, operation, and tuning.
+Standard Fulcrum needs an archival node with `txindex`, and asks your node to turn pruning off. This one does not. Blocks your node has already discarded are fetched from the Bitcoin network through the RPC proxy your node runs whenever pruning is on, both while Fulcrum builds its index and when a wallet looks up an old transaction. An archival node works too.
 
-## Requirements
+It installs alongside **Electrs Pruned**, so a server with two pruned nodes (one per chain, say) can run an Electrum server for each.
 
-- **Fulcrum is resource-intensive.** It reserves up to a quarter of the memory StartOS shares out among your services (never more than 2 GB) while building its address index, drops to 512 MB once the index is complete, and needs more on top of that for its own working memory — all while sharing the machine with the Bitcoin node it depends on. The indexes need 180 GB+; combined with a full Bitcoin node (~800 GB), total storage requirements exceed 1 TB, so a 2 TB drive is strongly recommended. Insufficient resources may cause system instability or failure.
-
-## What you get on StartOS
-
-- A high-performance **Electrum server** indexing your own Bitcoin node, exposed as the **Electrum (SSL)** interface for wallets to connect to.
-- Automatic wiring to Bitcoin: the RPC endpoint and cookie authentication are configured for you, so no manual node setup is required.
+**Read "How long the first index takes" and "Disk space" below before you install.**
 
 ## Getting set up
 
-Fulcrum requires the Knots flavor of Bitcoin, with `prune=0`, `txindex=true`, and ZMQ enabled. StartOS posts a critical task on Bitcoin to apply these settings if they are not already in place.
+1. Install a Bitcoin node first, if you have none. Pruning may be on or off.
+2. If more than one supported node is installed, Fulcrum Pruned asks which one to index (**Select Node**) before it starts. Pick the one whose chain your wallet uses. With only one installed, it is selected for you.
+3. Start Fulcrum Pruned. **Sync Progress** shows how far the index has got: a percentage, and the block it has reached out of your node's height.
+4. When **Sync Progress** reports **Fulcrum is synced**, point your wallet at the **Electrum (SSL)** interface. Copy the address from the **Interfaces** page; StartOS assigns the port.
 
-1. Install the Knots flavor of Bitcoin if you have not already. A standard Bitcoin node does not satisfy this package.
-2. Install Fulcrum. Resolve any critical task that appears on Bitcoin to enforce the required settings.
-3. Start Fulcrum. The initial index build takes many hours and pulls roughly 180 GB of data on top of the Bitcoin volume — plan for at least 1 TB of disk, ideally 2 TB.
-4. Watch the **Sync Progress** health check on the service dashboard. It shows Fulcrum's current indexing progress and reports **Fulcrum is synced** once the Electrum interface is ready to serve clients.
+Fulcrum opens the Electrum interface only once its index has caught up with the node, so wallets cannot connect during the first index.
 
-## Using Fulcrum
+## How long the first index takes
 
-### Connecting a wallet
+It depends on when you install it.
 
-Open the **Electrum (SSL)** interface and copy an address into your wallet. It is shown as an `ssl://` URL, and the host and port in it are what your wallet needs — **take the port from that address rather than assuming one**, since StartOS assigns it and it is not always the same number on every server.
+- **Best: before or during your node's own initial sync.** Fulcrum indexes blocks as the node gets them, before pruning discards them.
+- **Slowest: onto a node that has been pruned for a long time.** Every block below the prune point is fetched from the network again. Expect **a day or more**, and **several days if your node is Tor-only**.
 
-Only the encrypted endpoint is reachable from off this server, so your wallet's SSL option has to be on, and it has to be told to trust the certificate StartOS serves. The one exception is a Tor address you add with its **SSL** toggle turned off: that address alone is plain TCP, so turn SSL **off** in your wallet when you connect over it. Both steps, and where the settings live in each wallet, are in the [Start9 guide to connecting a wallet](https://docs.start9.com/bitcoin-guides/connecting-wallets). The Electrum desktop wallet needs a file placed by hand and is covered there too.
+It happens once per node. An interrupted index resumes where it left off.
 
-If your wallet connected over Tor before StartOS 0.4, that .onion address no longer reaches Fulcrum. Add an .onion address to the **Electrum (SSL)** interface and point your wallet at it.
+If Fulcrum says it is **waiting for your node to start**, the node is restarting (usually after an update). Fulcrum starts again by itself as soon as the node is back.
 
-### Configure
+## Disk space
 
-Run the **Configure** action to set:
+A Fulcrum index is about **190 GB**, roughly three times an Electrs index. That is still far less than an archival node (around 900 GB), but it is the heavier of the two pruned indexers. If disk is tight, use Electrs Pruned for your main node and Fulcrum Pruned for a second one.
 
-- **Server Banner** — custom text shown to connecting Electrum clients.
-- **Bitcoin RPC Timeout**, **Bitcoin RPC Clients** — how Fulcrum talks to Bitcoin.
-- **Worker Threads** — leave at `0` to let Fulcrum auto-detect, or pin a specific number.
-- **Database Memory** — the RocksDB cache size in MiB. StartOS sets this for you at install and lowers it to 512 once the index is built, so you should not need to touch it; raise it to trade RAM for faster queries. Once you set it yourself, StartOS stops adjusting it — except around a **Reindex**, where two values look like StartOS's own: 512 is raised for the rebuild and lowered back afterwards, and the default shown here is lowered to 512 when the rebuild finishes.
-- **Database Max Open Files** — raise this if the logs complain about too many open files.
-- **Max Address History** — the most transactions Fulcrum will report for one address. An address busier than the limit comes back with an empty or partial history, balance and coin list instead of an error, so a wallet holding that address shows the funds as missing even though they are still on chain. Raise this if you use an address with a very long history; the limit is there to cap what a single request can cost in memory and time.
+Fulcrum keeps **one index per node**. Switching nodes keeps the old index, so switching back is immediate, but each node you index costs its own ~190 GB. **Delete Unused Indexes** frees the space of nodes you no longer use.
 
-Saving Configure restarts Fulcrum, because it only reads its configuration at startup. Changing only the banner is the exception — it applies right away, with no restart. Leave the banner field empty to go back to Fulcrum's own default banner.
+## Actions
 
-### Reindex
+- **Select Node**: which node to index. Choosing a node indexed before is immediate; a new one needs a full index of its own.
+- **Delete Unused Indexes**: lists the indexes of nodes not selected now, with their sizes, and deletes the ones you tick.
+- **Configure**: server banner and performance settings. The Bitcoin RPC timeout starts at 120 seconds, because fetching a discarded block from the network can be slow.
+- **Reindex**: deletes the selected node's index and builds it again. Only for a corrupted index (Fulcrum keeps crashing with a database error). Not needed when switching nodes.
 
-Run the **Reindex** action if Fulcrum keeps crashing and its logs report a corrupted database — a `Corruption` error, or a message to delete the datadir and resync. It deletes the address index and rebuilds it from Bitcoin, without uninstalling Fulcrum or losing your settings.
+## What running against a pruned node costs you
 
-- Check that Bitcoin is fully synced and try a restart first — neither needs a reindex.
-- The rebuild takes as long as the first one did, which can be several days, and Fulcrum and anything that uses it are unavailable until it finishes. Database Memory is handled as on a fresh install: StartOS's own setting is raised for the rebuild and drops back to 512 when it is done. A value you set is kept, apart from the two exceptions under Database Memory above.
-- If the logs show input/output errors, check your drive before reindexing: a rebuild on a failing drive fails the same way.
+To serve blocks your node no longer stores, the proxy asks Bitcoin peers for them, by block hash. A peer learns which blocks you wanted, never which addresses. During the first index that only says you are syncing. Afterwards, looking up an old transaction or restoring a wallet with old history can fetch a block on demand. If your node runs over Tor, so do these fetches. If that tradeoff is not one you want, use an archival node with the official Fulcrum.
 
-## Limitations
+## Which chain
 
-- Peer discovery and network announcement are disabled; this server does not advertise itself to the Electrum peer-to-peer network.
-- The administrative RPC interface is not exposed.
+Fulcrum Pruned follows the chain of the node you select. Its `server.features` reply carries a `blake2b_fork` entry on the BLAKE2b chain (absent on SHA256), so a wallet or service can tell which side it is talking to. On the BLAKE2b chain, block headers from block 961,640 are 164 bytes: use a BLAKE2b-aware wallet there, such as the BLAKE2b build of Sparrow.
 
-## BLAKE2b proof of work
+If the node behind **Bitcoin Knots** is replaced by one on the other chain, Fulcrum notices, sets the old index aside with a notification, and builds a new one.
 
-This build of Fulcrum understands the 164-byte block headers Bitcoin uses since its change of proof of work to BLAKE2b as well as the original 80-byte ones, so it keeps indexing across the activation height instead of stopping there. The chain's history is continuous: blocks mined before the activation keep their original 80-byte headers, and both forms sit in the same index. Until your node reaches that height, nothing changes for you.
+## Built on
 
-Switching from the standard build keeps the existing index, with no resync. An index written by an early release of this package, which stored headers in a form neither build reads, is converted in place on the first start, which takes seconds. If that conversion cannot complete, the index is rebuilt from scratch, which takes as long as the original sync did.
+[Fulcrum](https://github.com/cculianu/Fulcrum) by Calin Culianu, through [privkeyio's BLAKE2b-aware fork](https://github.com/privkeyio/Fulcrum), with five small patches for pruned nodes. Unofficial and not audited.
 
-Note that your wallet needs its own support for the new header format. This server will hand it the post-activation headers correctly, but a wallet that has not been updated will reject them.
+Support: <https://paulscode.com/c/bitcoin/8>

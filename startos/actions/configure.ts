@@ -2,7 +2,11 @@ import { utils } from '@start9labs/start-sdk'
 import { rm } from 'fs/promises'
 import { sdk } from '../sdk'
 import { i18n } from '../i18n'
-import { defaultDbMem, fulcrumConf } from '../fileModels/fulcrum.conf'
+import {
+  defaultBitcoindTimeout,
+  defaultDbMem,
+  fulcrumConf,
+} from '../fileModels/fulcrum.conf'
 import { bannerTxt } from '../fileModels/banner.txt'
 
 const { InputSpec, Value } = sdk
@@ -23,13 +27,13 @@ const inputSpec = InputSpec.of({
   bitcoind_timeout: Value.number({
     name: i18n('Bitcoin RPC Timeout (seconds)'),
     description: i18n(
-      'Raise this if the logs show "bitcoind request timed out", which can happen while Bitcoin is still syncing or under heavy load.',
+      'How long Fulcrum waits for any one answer from the node. On a pruned node, a block the node has discarded is fetched from the network first, which can take a while, especially over Tor. Raise this if the logs show "bitcoind request timed out" or the index build keeps restarting.',
     ),
     required: false,
     default: null,
     integer: true,
     min: 30,
-    footnote: `${i18n('Default')}: 30`,
+    footnote: `${i18n('Default')}: ${String(defaultBitcoindTimeout)}`,
   }),
   bitcoind_clients: Value.number({
     name: i18n('Bitcoin RPC Clients'),

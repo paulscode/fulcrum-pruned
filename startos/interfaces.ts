@@ -10,12 +10,14 @@ export const setInterfaces = sdk.setupInterfaces(async ({ effects }) => {
   const electrumOrigin = await multiHost.bindPort(electrumPort, {
     protocol: null,
     addSsl: {
-      preferredExternalPort: 50002,
+      preferredExternalPort: 50012,
       alpn: null,
       addXForwardedHeaders: false,
       auth: null,
     },
-    preferredExternalPort: electrumPort,
+    // 50012 and 50011 rather than the 50002 and 50001 the official package prefers, which Electrs
+    // Pruned also prefers: a server running both gets two predictable, different ports.
+    preferredExternalPort: 50011,
     secure: null,
   })
 

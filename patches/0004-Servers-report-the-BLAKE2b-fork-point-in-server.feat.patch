@@ -1,0 +1,223 @@
+From 95395fb10aee7acfdffbf353709316acc24d6098 Mon Sep 17 00:00:00 2001
+From: Paul Lamb <paul@paulscode.com>
+Date: Sun, 8 Nov 2026 14:39:34 -0600
+Subject: [PATCH 4/5] Servers: report the BLAKE2b fork point in server.features
+
+genesis_hash cannot tell the SHA256 and BLAKE2b chains apart: the forked
+chain keeps the original's history, genesis included. A client, or a
+service picking an Electrum backend for one chain, has had no way to ask
+which side a server follows.
+
+When the indexed chain contains an extended header, server.features now
+carries
+
+  "blake2b_fork": {"height": <first extended height>, "hash": <its id>,
+                   "header_bytes": 164, "block_hash": "blake2b"}
+
+the same shape Electrs Pruned reports, so both can be read alike. The
+height is found by binary search over the stored headers
+(BTC::FindFirstV2Height), not compiled in, so a regtest activation
+height is reported correctly. Storage caches the answer and re-checks it
+against the stored header on each call. The key is absent on a chain with
+no extended header (the SHA256 chain, or a BLAKE2b index still below the
+split), which is itself the answer for that chain.
+
+Only the client-facing server.features carries it; the dict sent to peers
+is unchanged.
+---
+ src/BTC.cpp                     | 15 +++++++++++++++
+ src/BTC.h                       |  9 +++++++++
+ src/Servers.cpp                 | 21 ++++++++++++++++-----
+ src/Storage.cpp                 | 27 +++++++++++++++++++++++++++
+ src/Storage.h                   |  9 +++++++++
+ src/tests/BlockHeader_tests.cpp | 27 +++++++++++++++++++++++++++
+ 6 files changed, 103 insertions(+), 5 deletions(-)
+
+diff --git a/src/BTC.cpp b/src/BTC.cpp
+index 1c8b2c4..06c6f38 100644
+--- a/src/BTC.cpp
++++ b/src/BTC.cpp
+@@ -108,6 +108,21 @@ namespace BTC
+         return QByteArray(reinterpret_cast<const char *>(hash.begin()), int(hash.size()));
+     }
+ 
++    std::optional<unsigned> FindFirstV2Height(unsigned tip, const std::function<std::optional<bool>(unsigned)> &isV2At)
++    {
++        const auto tipIsV2 = isV2At(tip);
++        if (!tipIsV2 || !*tipIsV2) return std::nullopt;
++        unsigned lo = 0, hi = tip; // invariant: the header at hi is extended; the first extended one is in [lo, hi]
++        while (lo < hi) {
++            const unsigned mid = lo + (hi - lo) / 2;
++            const auto midIsV2 = isV2At(mid);
++            if (!midIsV2) return std::nullopt;
++            if (*midIsV2) hi = mid;
++            else lo = mid + 1;
++        }
++        return lo;
++    }
++
+     QByteArray HeaderHashRev(const QByteArray &hdr)
+     {
+         if (!IsHeaderV2(hdr))
+diff --git a/src/BTC.h b/src/BTC.h
+index abc2cfa..3c52b2c 100644
+--- a/src/BTC.h
++++ b/src/BTC.h
+@@ -35,8 +35,10 @@
+ #include <algorithm>
+ #include <cstddef> // for std::byte, etc
+ #include <cstring> // for memcpy
++#include <functional>
+ #include <ios>
+ #include <iterator>
++#include <optional>
+ #include <type_traits>
+ #include <utility> // for pair, etc
+ 
+@@ -167,6 +169,13 @@ namespace BTC
+     /// True iff `hdr` is a complete, correctly-sized serialized header.
+     inline bool IsHeaderSizeOk(const QByteArray &hdr) noexcept { return hdr.size() == GetBlockHeaderSize(hdr); }
+ 
++    /// The height of the first extended (BLAKE2b) header in a chain whose tip is at height `tip`, found by binary
++    /// search, so it needs no activation height compiled in and is right on a regtest chain as on mainnet. Relies on
++    /// every header from the first extended one onward being extended, which is how the chain activates.
++    /// `isV2At(h)` says whether the header at height h is extended, or nullopt if it could not be read.
++    /// Returns nullopt if the tip is not extended (this chain has no fork point, or has not reached it) or a read fails.
++    std::optional<unsigned> FindFirstV2Height(unsigned tip, const std::function<std::optional<bool>(unsigned)> &isV2At);
++
+     /// Returns the sha256 double hash (not reveresed -- little endian) of the input QByteArray. The results are copied
+     /// once from the hasher into the returned QByteArray.  This is faster than obtaining a uint256 from bitcoin::Hash
+     /// then converting to a QByteArray manually.
+diff --git a/src/Servers.cpp b/src/Servers.cpp
+index 9da5449..89346c1 100644
+--- a/src/Servers.cpp
++++ b/src/Servers.cpp
+@@ -1202,11 +1202,22 @@ void Server::rpc_server_features(Client *c, const RPC::BatchId batchId, const RP
+ {
+     const bool isBCH = coin == BTC::Coin::BCH;
+     const auto rsi = bitcoindmgr->getRpcSupportInfo();
+-    emit c->sendResult(batchId, m.id,
+-                       makeFeaturesDictForConnection(c, storage->genesisHash(), *options, rsi.hasDSProofRPC,
+-                                                     /* cashTokens = */ isBCH,
+-                                                     /* rpaStartHeight = */ storage->getConfiguredRpaStartHeight(),
+-                                                     rsi.hasSubmitPackageRPC));
++    QVariantMap features = makeFeaturesDictForConnection(c, storage->genesisHash(), *options, rsi.hasDSProofRPC,
++                                                         /* cashTokens = */ isBCH,
++                                                         /* rpaStartHeight = */ storage->getConfiguredRpaStartHeight(),
++                                                         rsi.hasSubmitPackageRPC);
++    // Which side of the BLAKE2b fork this server follows. genesis_hash cannot say: the forked chain keeps the
++    // original's history, genesis included. Reported as the fork point, in the same shape Electrs Pruned uses, so a
++    // client (or a service choosing a backend) can tell the chains apart and check it against the headers it is
++    // then served. Absent on a chain with no extended header, which is itself the answer for that chain.
++    if (const auto fork = storage->blake2bForkPoint())
++        features["blake2b_fork"] = QVariantMap{
++            {"height", unsigned(fork->first)},
++            {"hash", QString::fromLatin1(Util::ToHexFast(fork->second))},
++            {"header_bytes", BTC::GetBlockHeaderSizeV2()},
++            {"block_hash", QStringLiteral("blake2b")},
++        };
++    emit c->sendResult(batchId, m.id, features);
+ }
+ void Server::rpc_server_peers_subscribe(Client *c, const RPC::BatchId batchId, const RPC::Message &m)
+ {
+diff --git a/src/Storage.cpp b/src/Storage.cpp
+index 53e01c8..f8a24f6 100644
+--- a/src/Storage.cpp
++++ b/src/Storage.cpp
+@@ -2822,6 +2822,33 @@ void Storage::deleteHeadersPastHeight(rocksdb::WriteBatch &batch, BlockHeight he
+         throw InternalError("header truncate resulted in an unexepected value");
+ }
+ 
++auto Storage::blake2bForkPoint() const -> std::optional<std::pair<BlockHeight, HeaderHash>>
++{
++    Header tipHeader;
++    const int tipHeight = latestTip(&tipHeader).first;
++    if (tipHeight < 0 || !BTC::IsHeaderV2(tipHeader))
++        return std::nullopt; // no extended header in this chain, or not yet
++    const auto hashAt = [this](BlockHeight h) -> std::optional<HeaderHash> {
++        if (const auto hdr = headerForHeight(h)) return BTC::HeaderHashRev(*hdr);
++        return std::nullopt;
++    };
++    {
++        std::unique_lock g(forkPointMut);
++        if (forkPointCache && int(forkPointCache->first) <= tipHeight && hashAt(forkPointCache->first) == forkPointCache->second)
++            return forkPointCache;
++    }
++    const auto height = BTC::FindFirstV2Height(unsigned(tipHeight), [this](unsigned h) -> std::optional<bool> {
++        if (const auto hdr = headerForHeight(h)) return BTC::IsHeaderV2(*hdr);
++        return std::nullopt;
++    });
++    if (!height) return std::nullopt;
++    const auto hash = hashAt(*height);
++    if (!hash) return std::nullopt;
++    std::unique_lock g(forkPointMut);
++    forkPointCache.emplace(*height, *hash);
++    return forkPointCache;
++}
++
+ auto Storage::headerForHeight(BlockHeight height, QString *err, HeaderHash *hashOut) const -> std::optional<Header>
+ {
+     std::optional<Header> ret;
+diff --git a/src/Storage.h b/src/Storage.h
+index b8983f5..f0bf89a 100644
+--- a/src/Storage.h
++++ b/src/Storage.h
+@@ -133,6 +133,12 @@ public:
+     /// Convenience. Given a block height, return the block hash.
+     std::optional<HeaderHash> hashForHeight(BlockHeight height, QString *err = nullptr) const;
+ 
++    /// Where this chain switched to extended (BLAKE2b) headers: the height of the first one and its block hash (reversed,
++    /// as bitcoind renders it). nullopt on a chain with no extended header, or one whose tip has not reached it yet.
++    /// Thread safe. Found by binary search over the stored headers the first time, then cached; a cached answer is
++    /// re-checked against the stored header on each call, so a reorg across the fork point cannot leave it stale.
++    std::optional<std::pair<BlockHeight, HeaderHash>> blake2bForkPoint() const;
++
+     /// Implicitly takes a lock to return this. Thread safe. Breakdown of info returned:
+     ///   .first - the latest valid height we have synched or -1 if no headers.
+     ///   .second - the latest valid chainTip 32-byte sha256 double hash of the header (the chainTip as it's called in
+@@ -498,6 +504,9 @@ protected:
+     bool isRpaNeedsFullCheck() const;
+ 
+ private:
++    mutable std::mutex forkPointMut; ///< guards forkPointCache
++    mutable std::optional<std::pair<BlockHeight, HeaderHash>> forkPointCache; ///< see blake2bForkPoint()
++
+     const std::shared_ptr<const Options> options;
+     const std::unique_ptr<ScriptHashSubsMgr> subsmgr;
+     const std::unique_ptr<DSProofSubsMgr> dspsubsmgr;
+diff --git a/src/tests/BlockHeader_tests.cpp b/src/tests/BlockHeader_tests.cpp
+index a8ac403..ccea911 100644
+--- a/src/tests/BlockHeader_tests.cpp
++++ b/src/tests/BlockHeader_tests.cpp
+@@ -207,4 +207,31 @@ TEST_CASE(header_hash_dispatch) {
+     Log() << "HeaderHash dispatches on the header, and refuses one flagged extended that is not";
+ };
+ 
++TEST_CASE(fork_point_search) {
++    // BTC::FindFirstV2Height backs server.features' blake2b_fork. A chain is modelled by its activation height:
++    // headers below it are legacy, headers from it on are extended.
++    unsigned reads = 0;
++    const auto chain = [&reads](std::optional<unsigned> activation) {
++        return [&reads, activation](unsigned h) -> std::optional<bool> { ++reads; return activation && h >= *activation; };
++    };
++    // the BLAKE2b mainnet split, read at a recent tip, in about log2(tip) reads rather than a scan
++    reads = 0;
++    TEST_CHECK(BTC::FindFirstV2Height(981133, chain(961640u)) == std::optional<unsigned>(961640));
++    TEST_CHECK(reads <= 22);
++    // the SHA256 chain, and a BLAKE2b chain still below activation: no fork point
++    TEST_CHECK(!BTC::FindFirstV2Height(981133, chain(std::nullopt)));
++    TEST_CHECK(!BTC::FindFirstV2Height(961639, chain(961640u)));
++    // edges: activation exactly at the tip, at height 1, and a chain extended from genesis
++    TEST_CHECK(BTC::FindFirstV2Height(961640, chain(961640u)) == std::optional<unsigned>(961640));
++    TEST_CHECK(BTC::FindFirstV2Height(200, chain(1u)) == std::optional<unsigned>(1));
++    TEST_CHECK(BTC::FindFirstV2Height(0, chain(0u)) == std::optional<unsigned>(0));
++    // a regtest activation height, which nothing may assume
++    TEST_CHECK(BTC::FindFirstV2Height(25, chain(10u)) == std::optional<unsigned>(10));
++    // an unreadable header gives no answer rather than a wrong one
++    // the first probe is the midpoint
++    const auto unreadable = [](unsigned h) -> std::optional<bool> { if (h == 981133 / 2) return std::nullopt; return h >= 961640; };
++    TEST_CHECK(!BTC::FindFirstV2Height(981133, unreadable));
++    Log() << "FindFirstV2Height finds the first extended header by binary search";
++};
++
+ TEST_SUITE_END()
