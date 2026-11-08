@@ -25,7 +25,7 @@ node behind btc-rpc-proxy `v0.8.2-blake2b.2`: index from genesis, raw and verbos
 txid, a mempool transaction, a coinbase, verbose fields against the node, `server.features`, the
 same against an archival node without `txindex`, 0004's error with the proxy taken away, and a
 client pipelining 3,000 lookups (paused at 50 in flight). The harness lives in
-the project folder (`spikes/harness/` in `/mnt/Black/fulcrum-pruned`).
+this repository at `dev/spikes/harness/`.
 
 0001-0004 are chain-agnostic and worth offering upstream (cculianu/Fulcrum, with `BTC::HashRev`
 for `HeaderHashRev` in 0003 and 0004, and gated to Core-derived nodes: bchd and some other BCH

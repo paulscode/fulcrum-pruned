@@ -5,7 +5,7 @@ export const manifest = setupManifest({
   id: 'fulcrum-pruned',
   title: 'Fulcrum Pruned',
   license: 'MIT',
-  packageRepo: 'https://github.com/paulscode/fulcrum-pruned-startos',
+  packageRepo: 'https://github.com/paulscode/fulcrum-pruned',
   upstreamRepo: 'https://github.com/cculianu/Fulcrum',
   marketingUrl: 'https://github.com/cculianu/Fulcrum',
   donationUrl: 'https://github.com/cculianu/Fulcrum',

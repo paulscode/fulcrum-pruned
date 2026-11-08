@@ -36,8 +36,10 @@ verified, tried, and decided belongs in the commit message and the PR body.
 
 Fulcrum Pruned: privkeyio's BLAKE2b Fulcrum plus `patches/`, packaged to index a **pruned** node
 on either chain, chosen with Select Node. Forked from privkeyio/fulcrum-startos `v2.1.4-blake_0`
-(remote `privkeyio`). The project folder `/mnt/Black/fulcrum-pruned` holds the plan, the patch
-working tree and the regtest harness.
+(remote `privkeyio`); published as `paulscode/fulcrum-pruned`. `dev/` holds the dev build image
+and the regtest harness (`dev/spikes/`) and the i18n scanner (`dev/tools/`); the patch working
+tree is a git worktree of the fork at `dev/spikes/fulcrum-src` (ignored). The plan lives in the
+project folder `/mnt/Black/fulcrum-pruned` (`internal_docs/`, not published).
 
 - **No autoconfig task, ever.** No prune, txindex or ZeroMQ requirement: that is the point of the
   package. If you want one, the bug is elsewhere.

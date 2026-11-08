@@ -17,15 +17,15 @@ never a branch.
 
 ## Applying the bump
 
-1. Rebase the patch series onto the new tag, in a working branch of the fork (the project folder
-   keeps one at `/mnt/Black/fulcrum-pruned/spikes/fulcrum-src`, branch `pruned`):
+1. Rebase the patch series onto the new tag, in a working branch of the fork (kept as a git
+   worktree of a privkeyio/Fulcrum clone at `dev/spikes/fulcrum-src`, branch `pruned`; ignored):
 
    ```sh
    git rebase --onto <new tag> <old tag> pruned
    ```
 
    Build with `DEFINES+=ENABLE_TESTS`, run `Fulcrum --test all` from the source directory, and run
-   the regtest harness (`spikes/harness/`, both `CHAIN=sha256` and `CHAIN=blake2b`). Then
+   the regtest harness (`dev/spikes/harness/`, both `CHAIN=sha256` and `CHAIN=blake2b`). Then
    regenerate:
 
    ```sh
