@@ -27,13 +27,15 @@ two pruned nodes can run an Electrum server for each.
 
 See `patches/README.md`. In short, against a node whose RPC is fronted by btc-rpc-proxy:
 
-1. `getblock <hash> 0`, not `false`: the proxy serves pruned blocks only for numeric verbosity.
-2. `blockchain.transaction.get` passes the block hash from Fulcrum's own index, so no `txindex`
+1. A reply with no `content-type` is accepted (the proxy omits it on the replies it builds).
+2. `getblock <hash> 0`, not `false`: the proxy serves pruned blocks only for numeric verbosity.
+3. `blockchain.transaction.get` passes the block hash from Fulcrum's own index, so no `txindex`
    is needed; an unknown txid gets "not in the index of this server" rather than txindex advice.
-3. The startup check asks for tx #1 by block hash and names the proxy if that fails.
-4. `server.features.blake2b_fork = {height, hash, header_bytes: 164, block_hash: "blake2b"}` on a
+   Counted against the client's throttle as it is read, and the reply checked to be the
+   transaction asked for.
+4. The startup check asks for tx #1 by block hash and names the proxy if that fails (three tries).
+5. `server.features.blake2b_fork = {height, hash, header_bytes: 164, block_hash: "blake2b"}` on a
    chain with extended headers; absent otherwise. Same shape as Electrs Pruned.
-5. A reply with no `content-type` is accepted (the proxy omits it on the replies it builds).
 
 ## Nodes (Select Node)
 

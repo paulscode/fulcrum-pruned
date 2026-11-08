@@ -1,7 +1,7 @@
-From 95395fb10aee7acfdffbf353709316acc24d6098 Mon Sep 17 00:00:00 2001
+From 739f08e00b9a1d8608dad062d1436701820ce541 Mon Sep 17 00:00:00 2001
 From: Paul Lamb <paul@paulscode.com>
 Date: Sun, 8 Nov 2026 14:39:34 -0600
-Subject: [PATCH 4/5] Servers: report the BLAKE2b fork point in server.features
+Subject: [PATCH 5/5] Servers: report the BLAKE2b fork point in server.features
 
 genesis_hash cannot tell the SHA256 and BLAKE2b chains apart: the forked
 chain keeps the original's history, genesis included. A client, or a
@@ -24,14 +24,20 @@ split), which is itself the answer for that chain.
 
 Only the client-facing server.features carries it; the dict sent to peers
 is unchanged.
+
+The cached answer is kept against the tip it was confirmed at, so an
+unchanged tip costs no database reads; reads happen outside the lock.
+And a height is reported only if the header before it is legacy: the
+search assumes extended headers continue once they start, which a crafted
+chain need not honour.
 ---
- src/BTC.cpp                     | 15 +++++++++++++++
- src/BTC.h                       |  9 +++++++++
- src/Servers.cpp                 | 21 ++++++++++++++++-----
- src/Storage.cpp                 | 27 +++++++++++++++++++++++++++
- src/Storage.h                   |  9 +++++++++
- src/tests/BlockHeader_tests.cpp | 27 +++++++++++++++++++++++++++
- 6 files changed, 103 insertions(+), 5 deletions(-)
+ src/BTC.cpp                     | 15 ++++++++++++
+ src/BTC.h                       |  9 +++++++
+ src/Servers.cpp                 | 21 ++++++++++++----
+ src/Storage.cpp                 | 43 +++++++++++++++++++++++++++++++++
+ src/Storage.h                   | 10 ++++++++
+ src/tests/BlockHeader_tests.cpp | 27 +++++++++++++++++++++
+ 6 files changed, 120 insertions(+), 5 deletions(-)
 
 diff --git a/src/BTC.cpp b/src/BTC.cpp
 index 1c8b2c4..06c6f38 100644
@@ -89,10 +95,10 @@ index abc2cfa..3c52b2c 100644
      /// once from the hasher into the returned QByteArray.  This is faster than obtaining a uint256 from bitcoin::Hash
      /// then converting to a QByteArray manually.
 diff --git a/src/Servers.cpp b/src/Servers.cpp
-index 9da5449..89346c1 100644
+index e294b7d..4e74d6e 100644
 --- a/src/Servers.cpp
 +++ b/src/Servers.cpp
-@@ -1202,11 +1202,22 @@ void Server::rpc_server_features(Client *c, const RPC::BatchId batchId, const RP
+@@ -1215,11 +1215,22 @@ void Server::rpc_server_features(Client *c, const RPC::BatchId batchId, const RP
  {
      const bool isBCH = coin == BTC::Coin::BCH;
      const auto rsi = bitcoindmgr->getRpcSupportInfo();
@@ -121,45 +127,61 @@ index 9da5449..89346c1 100644
  void Server::rpc_server_peers_subscribe(Client *c, const RPC::BatchId batchId, const RPC::Message &m)
  {
 diff --git a/src/Storage.cpp b/src/Storage.cpp
-index 53e01c8..f8a24f6 100644
+index 53e01c8..afbe5e8 100644
 --- a/src/Storage.cpp
 +++ b/src/Storage.cpp
-@@ -2822,6 +2822,33 @@ void Storage::deleteHeadersPastHeight(rocksdb::WriteBatch &batch, BlockHeight he
+@@ -2822,6 +2822,49 @@ void Storage::deleteHeadersPastHeight(rocksdb::WriteBatch &batch, BlockHeight he
          throw InternalError("header truncate resulted in an unexepected value");
  }
  
 +auto Storage::blake2bForkPoint() const -> std::optional<std::pair<BlockHeight, HeaderHash>>
 +{
 +    Header tipHeader;
-+    const int tipHeight = latestTip(&tipHeader).first;
++    const auto [tipHeight, tipHash] = latestTip(&tipHeader);
 +    if (tipHeight < 0 || !BTC::IsHeaderV2(tipHeader))
 +        return std::nullopt; // no extended header in this chain, or not yet
++    // Unchanged tip, unchanged answer: no database reads at all. server.features is answered on the client thread
++    // and can be asked for often.
++    std::optional<std::pair<BlockHeight, HeaderHash>> cached;
++    {
++        std::unique_lock g(forkPointMut);
++        if (forkPointCache && forkPointTip == tipHash)
++            return forkPointCache;
++        cached = forkPointCache;
++    }
++    // The tip moved. The cached answer still holds if the header at its height is the one it names: a header's hash
++    // commits to every header below it, so a reorg at or below the fork point changes it. Reads happen outside the
++    // lock.
 +    const auto hashAt = [this](BlockHeight h) -> std::optional<HeaderHash> {
 +        if (const auto hdr = headerForHeight(h)) return BTC::HeaderHashRev(*hdr);
 +        return std::nullopt;
 +    };
-+    {
-+        std::unique_lock g(forkPointMut);
-+        if (forkPointCache && int(forkPointCache->first) <= tipHeight && hashAt(forkPointCache->first) == forkPointCache->second)
-+            return forkPointCache;
-+    }
-+    const auto height = BTC::FindFirstV2Height(unsigned(tipHeight), [this](unsigned h) -> std::optional<bool> {
++    const auto isV2At = [this](unsigned h) -> std::optional<bool> {
 +        if (const auto hdr = headerForHeight(h)) return BTC::IsHeaderV2(*hdr);
 +        return std::nullopt;
-+    });
-+    if (!height) return std::nullopt;
-+    const auto hash = hashAt(*height);
-+    if (!hash) return std::nullopt;
++    };
++    std::optional<std::pair<BlockHeight, HeaderHash>> result;
++    if (cached && int(cached->first) <= tipHeight && hashAt(cached->first) == cached->second)
++        result = cached;
++    else if (const auto height = BTC::FindFirstV2Height(unsigned(tipHeight), isV2At)) {
++        // The search assumes every header from the first extended one on is extended, which is how the chain
++        // activates; a crafted chain need not be. Report only a height whose predecessor is legacy, so the answer is
++        // at least a real switch from legacy to extended headers.
++        const bool predecessorLegacy = *height == 0 || isV2At(*height - 1) == std::optional<bool>(false);
++        if (const auto hash = predecessorLegacy ? hashAt(*height) : std::nullopt)
++            result.emplace(*height, *hash);
++    }
 +    std::unique_lock g(forkPointMut);
-+    forkPointCache.emplace(*height, *hash);
-+    return forkPointCache;
++    forkPointCache = result;
++    forkPointTip = tipHash;
++    return result;
 +}
 +
  auto Storage::headerForHeight(BlockHeight height, QString *err, HeaderHash *hashOut) const -> std::optional<Header>
  {
      std::optional<Header> ret;
 diff --git a/src/Storage.h b/src/Storage.h
-index b8983f5..f0bf89a 100644
+index b8983f5..376ad6e 100644
 --- a/src/Storage.h
 +++ b/src/Storage.h
 @@ -133,6 +133,12 @@ public:
@@ -175,12 +197,13 @@ index b8983f5..f0bf89a 100644
      /// Implicitly takes a lock to return this. Thread safe. Breakdown of info returned:
      ///   .first - the latest valid height we have synched or -1 if no headers.
      ///   .second - the latest valid chainTip 32-byte sha256 double hash of the header (the chainTip as it's called in
-@@ -498,6 +504,9 @@ protected:
+@@ -498,6 +504,10 @@ protected:
      bool isRpaNeedsFullCheck() const;
  
  private:
-+    mutable std::mutex forkPointMut; ///< guards forkPointCache
++    mutable std::mutex forkPointMut; ///< guards forkPointCache and forkPointTip
 +    mutable std::optional<std::pair<BlockHeight, HeaderHash>> forkPointCache; ///< see blake2bForkPoint()
++    mutable HeaderHash forkPointTip; ///< the tip forkPointCache was last confirmed against
 +
      const std::shared_ptr<const Options> options;
      const std::unique_ptr<ScriptHashSubsMgr> subsmgr;

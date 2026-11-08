@@ -101,7 +101,7 @@ export function isBackendId(v: unknown): v is BackendId {
  * - On the BLAKE2b chain the proxy must also advertise NODE_BLAKE2B (`v0.8.2-blake2b.2`): Knots
  *   29.4.3 and later serve nothing past the chain split to a peer that does not.
  *
- * Fulcrum's startup check (patch 0003) still reports an incapable proxy plainly, for anything
+ * Fulcrum's startup check (patch 0004) still reports an incapable proxy plainly, for anything
  * a range lets through.
  */
 export const versionRange: Record<BackendId, string> = {

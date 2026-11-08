@@ -1,7 +1,7 @@
-From 0ba0b420e1b234c49555787cdf4467565774794d Mon Sep 17 00:00:00 2001
+From 55de0419ac46a24f2c6f2bad96dd41f622a609f5 Mon Sep 17 00:00:00 2001
 From: Paul Lamb <paul@paulscode.com>
 Date: Sun, 8 Nov 2026 14:32:57 -0600
-Subject: [PATCH 1/5] Controller: request blocks with numeric verbosity 0
+Subject: [PATCH 2/5] Controller: request blocks with numeric verbosity 0
 
 getblock <hash> false and getblock <hash> 0 mean the same to bitcoind,
 but btc-rpc-proxy, which a pruned node puts in front of its RPC port to

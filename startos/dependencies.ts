@@ -13,7 +13,7 @@ import { sdk } from './sdk'
  * There is deliberately **no autoconfig task.** The official and BLAKE2b Fulcrum packages raise
  * a critical one forcing `prune: 0`, `txindex: true` and ZeroMQ on. This package exists to drop
  * all three: blocks and transactions a pruned node has discarded come through btc-rpc-proxy
- * (patches 0001, 0002, 0005), `txindex` is never needed (and Knots refuses it with pruning), and
+ * (patches 0001-0003), `txindex` is never needed (and Knots refuses it with pruning), and
  * Fulcrum finds ZeroMQ by itself when the node has it on, polling every two seconds otherwise.
  * If you find yourself adding a task here, the bug is elsewhere.
  */

@@ -1,7 +1,7 @@
-From 93de15258a4ddca8df263bf12a67d3799d855702 Mon Sep 17 00:00:00 2001
+From 4413f8b045a88aa47dbbeeedcb4411c7c2b0f989 Mon Sep 17 00:00:00 2001
 From: Paul Lamb <paul@paulscode.com>
 Date: Sun, 8 Nov 2026 14:36:21 -0600
-Subject: [PATCH 3/5] Controller: check at startup that bitcoind serves
+Subject: [PATCH 4/5] Controller: check at startup that bitcoind serves
  transactions by block hash
 
 The startup check asked for tx #1 with getrawtransaction and no block
@@ -15,15 +15,18 @@ from a pruned node, so this exercises the pruned path end to end. On
 failure, say what is actually needed: btc-rpc-proxy v0.8.0 or later on a
 pruned node's RPC port. An archival node answers it with or without
 -txindex.
+
+Three failures and it stops asking until restart, rather than a fetch
+from peers and the banner on every block.
 ---
- src/Controller.cpp | 29 +++++++++++++++++++----------
- 1 file changed, 19 insertions(+), 10 deletions(-)
+ src/Controller.cpp | 40 ++++++++++++++++++++++++++++------------
+ 1 file changed, 28 insertions(+), 12 deletions(-)
 
 diff --git a/src/Controller.cpp b/src/Controller.cpp
-index ebf75d8..5296758 100644
+index ebf75d8..6e9520e 100644
 --- a/src/Controller.cpp
 +++ b/src/Controller.cpp
-@@ -213,14 +213,20 @@ void Controller::startup()
+@@ -213,14 +213,21 @@ void Controller::startup()
          }
      }, Qt::QueuedConnection);
  
@@ -38,7 +41,9 @@ index ebf75d8..5296758 100644
 +    // than by the first wallet that looks a transaction up. Called initially when upToDate() is first emitted, and
 +    // disconnects itself from upToDate once it succeeds.
      auto connPtr2 = std::make_shared<QMetaObject::Connection>();
-     *connPtr2 = connect(this, &Controller::upToDate, this, [this, connPtr2] {
+-    *connPtr2 = connect(this, &Controller::upToDate, this, [this, connPtr2] {
++    auto failures = std::make_shared<int>(0);
++    *connPtr2 = connect(this, &Controller::upToDate, this, [this, connPtr2, failures] {
          const auto optHash = storage->hashForTxNum(1, false, nullptr, true); // skip cache, read from txNum2txHash file to get first non-genesis tx hash
          if (!optHash) return; // no blocks yet, somehow. must be a brand new chain. we will be called again later when blocks start showing up.
 +        const auto optHeight = storage->heightForTxNum(1);
@@ -48,7 +53,7 @@ index ebf75d8..5296758 100644
          auto onSuccess = [this, connPtr2, hash=*optHash] (const RPC::Message &resp) {
              bitcoin::CMutableTransaction tx;
              constexpr auto kErrLine2 = "Something is wrong with either BitcoinD or our ability to understand its RPC responses.";
-@@ -236,23 +242,26 @@ void Controller::startup()
+@@ -236,23 +243,32 @@ void Controller::startup()
                  Error() << kErrLine2;
                  return;
              }
@@ -57,7 +62,10 @@ index ebf75d8..5296758 100644
              // success! disconnect the slot now, connPtr2 will delete the managed object when we return.
              disconnect(*connPtr2);
          };
-         auto onError = [] (const RPC::Message &resp) {
+-        auto onError = [] (const RPC::Message &resp) {
++        // Asked again at each upToDate (each new block) until it succeeds, but not forever: on a node that cannot serve
++        // it, that is a fetch from peers and this banner on every block. Three tries, then the banner says so and stops.
++        auto onError = [this, connPtr2, failures] (const RPC::Message &resp) {
              Error() << "\n"
                      << "******************************************************************************\n"
 -                    << "*   Error: txindex verification failed!                                      *\n"
@@ -69,6 +77,10 @@ index ebf75d8..5296758 100644
 +                    << "*   from peers. -txindex is not needed, and a pruned node cannot enable it.  *\n"
                      << "******************************************************************************\n\n"
                      << "Error response was:\n\n\t" << resp.errorMessage() << "\n\n";
++            if (++*failures >= 3) {
++                Error() << "Not checking again until Fulcrum restarts.";
++                disconnect(*connPtr2);
++            }
          };
          auto onFail = [] (RPC::Message::Id, const QString &errMsg) {
 -            Warning() << "Unable to verify that BitcoinD is using txindex. Error: " << errMsg;
