@@ -1,4 +1,5 @@
 import {
+  defaultBitcoindClients,
   defaultBitcoindTimeout,
   defaultDbMem,
   fulcrumConf,
@@ -10,7 +11,11 @@ export const seedFiles = sdk.setupOnInit(async (effects, kind) => {
   await fulcrumConf.merge(
     effects,
     kind === 'install'
-      ? { db_mem: defaultDbMem(), bitcoind_timeout: defaultBitcoindTimeout }
+      ? {
+          db_mem: defaultDbMem(),
+          bitcoind_timeout: defaultBitcoindTimeout,
+          bitcoind_clients: defaultBitcoindClients(),
+        }
       : {},
   )
   await storeJson.merge(effects, {})

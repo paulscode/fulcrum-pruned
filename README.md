@@ -75,7 +75,7 @@ the cookie on every request; the daemon waits up to 5 minutes for it before star
 
 Owned by the package: `datadir` (`/data/db/<node id>`), `bitcoind` (bridge address), `rpccookie`,
 `tcp = 0.0.0.0:50001`, `peering = false`, `announce = false`, `banner`. Exposed in Configure:
-`bitcoind_timeout` (seeded 120 s at install; Fulcrum's default is 30), `bitcoind_clients`,
+`bitcoind_timeout` (seeded 120 s at install; Fulcrum's default is 30), `bitcoind_clients` (seeded at install for about 32 requests in flight: 7 on 4 cores, 3 from 8 cores up),
 `worker_threads`, `db_mem` (seeded at install, lowered after a node's first complete index unless
 the user set it), `db_max_open_files`, `max_history`. `max_reorg` is left at Fulcrum's default.
 

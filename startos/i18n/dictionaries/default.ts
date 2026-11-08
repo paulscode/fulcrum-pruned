@@ -8,7 +8,7 @@ const dict = {
   'How long Fulcrum waits for any one answer from the node. On a pruned node, a block the node has discarded is fetched from the network first, which can take a while, especially over Tor. Raise this if the logs show "bitcoind request timed out" or the index build keeps restarting.': 4,
   Default: 5,
   'Bitcoin RPC Clients': 6,
-  'More clients can speed up the index build, but only if Bitcoin accepts as many concurrent RPC requests (its rpcthreads setting). Keep it at or below the number of CPU cores.': 7,
+  "How many requests Fulcrum keeps open to the node while it builds its index. On a pruned node, blocks it has discarded are fetched from the network one by one, slowly, so more requests at once build the index faster. Each also counts against the node's RPC work queue (64 by default), so keep the total (this plus one, times the CPU cores) at or below about 32.": 7,
   'Worker Threads (0 for auto)': 8,
   '0 uses every CPU core, which keeps Fulcrum most responsive. Set a number to cap how much of the CPU Fulcrum can take.': 9,
   'Database Memory (MB)': 10,

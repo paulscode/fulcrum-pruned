@@ -3,6 +3,7 @@ import { rm } from 'fs/promises'
 import { sdk } from '../sdk'
 import { i18n } from '../i18n'
 import {
+  defaultBitcoindClients,
   defaultBitcoindTimeout,
   defaultDbMem,
   fulcrumConf,
@@ -38,13 +39,14 @@ const inputSpec = InputSpec.of({
   bitcoind_clients: Value.number({
     name: i18n('Bitcoin RPC Clients'),
     description: i18n(
-      'More clients can speed up the index build, but only if Bitcoin accepts as many concurrent RPC requests (its rpcthreads setting). Keep it at or below the number of CPU cores.',
+      "How many requests Fulcrum keeps open to the node while it builds its index. On a pruned node, blocks it has discarded are fetched from the network one by one, slowly, so more requests at once build the index faster. Each also counts against the node's RPC work queue (64 by default), so keep the total (this plus one, times the CPU cores) at or below about 32.",
     ),
     required: false,
     default: null,
     integer: true,
     min: 1,
-    footnote: `${i18n('Default')}: 3`,
+    max: 16,
+    footnote: `${i18n('Default')}: ${String(defaultBitcoindClients())}`,
   }),
   worker_threads: Value.number({
     name: i18n('Worker Threads (0 for auto)'),

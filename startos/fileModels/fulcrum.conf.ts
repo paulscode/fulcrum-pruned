@@ -1,5 +1,5 @@
 import { FileHelper, z } from '@start9labs/start-sdk'
-import { totalmem } from 'os'
+import { availableParallelism, totalmem } from 'os'
 import { sdk } from '../sdk'
 
 // The post-sync reduction only reclaims db_mem while it still equals this, so a
@@ -13,6 +13,17 @@ export const syncedDbMem = () => Math.min(512, defaultDbMem())
 // height comes from peers through btc-rpc-proxy, which can take longer than that, over Tor
 // especially. A timeout fails the whole download task and restarts it from the database tip.
 export const defaultBitcoindTimeout = 120
+
+// Seeded at install. Fulcrum keeps about cores x (bitcoind_clients + 1) block requests in flight
+// while it builds its index. Against a pruned node each is a fetch from peers through the proxy,
+// slow one at a time but parallel well: measured on a 4-core server (2026-11-08), 16 in flight gave
+// 0.7 blocks/s and 32 gave 1.5, with no failures, and 64 no more. So aim for about 32, which is also
+// half of bitcoind's default RPC work queue (64). Fulcrum's own default, 3, from 8 cores up.
+export const defaultBitcoindClients = () =>
+  Math.min(
+    8,
+    Math.max(3, Math.ceil(32 / Math.max(1, availableParallelism())) - 1),
+  )
 
 // The union's transform output is not revalidated, so without the pipe
 // Number('abc') succeeds as NaN and is written back into the file.
