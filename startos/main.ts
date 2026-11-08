@@ -3,8 +3,8 @@ import { existsSync } from 'fs'
 import { mkdir, readFile, rm, writeFile } from 'fs/promises'
 import { StringDecoder } from 'string_decoder'
 import { manifest as bitcoinManifest } from 'bitcoin-core-startos/startos/manifest'
-import { BackendId, backends, defaultBackend } from './backends'
-import { forgetChain, guardChain } from './chainGuard'
+import { BackendId, backends, defaultBackend, isBackendId } from './backends'
+import { forgetChain, guardChain, stampChain } from './chainGuard'
 import {
   defaultDbMem,
   fulcrumConf,
@@ -28,12 +28,10 @@ async function markUnsynced(effects: T.Effects, node: BackendId) {
 }
 
 /**
- * Deletes one node's database, so Fulcrum rebuilds it. The other nodes' databases are untouched.
- * Restores the build-time database memory if we lowered it after a sync.
+ * Restores the build-time database memory for an index about to be built, if we lowered it after
+ * an earlier sync. Only our own value is touched; one the user chose in Configure stays theirs.
  */
-async function discardIndex(effects: T.Effects, node: BackendId) {
-  await rm(dbDirOnVolume(node), { recursive: true, force: true })
-  await forgetChain(node)
+async function raiseDbMemForBuild(effects: T.Effects) {
   if (
     (await fulcrumConf.read((c) => c.db_mem).once()) === syncedDbMem() &&
     syncedDbMem() < defaultDbMem()
@@ -44,6 +42,13 @@ async function discardIndex(effects: T.Effects, node: BackendId) {
       { allowWriteAfterConst: true },
     )
   }
+}
+
+/** Deletes one node's database, so Fulcrum rebuilds it. The other nodes' databases are untouched. */
+async function discardIndex(effects: T.Effects, node: BackendId) {
+  await rm(dbDirOnVolume(node), { recursive: true, force: true })
+  await forgetChain(node)
+  await raiseDbMemForBuild(effects)
   await markUnsynced(effects, node)
 }
 
@@ -55,11 +60,17 @@ export const main = sdk.setupMain(async ({ effects }) => {
   const node = backends[backend]
   console.info(`Indexing ${node.title} (${backend})`)
 
+  // The marker names the node that was selected when Reindex ran, so a switch before the next
+  // start does not turn it on a different node's index. An empty marker means the selected one.
   if (existsSync(reindexRequest)) {
+    const named = (
+      await readFile(reindexRequest, 'utf8').catch(() => '')
+    ).trim()
+    const target = isBackendId(named) ? named : backend
     console.warn(
-      `Reindex requested. Deleting the ${backend} database; Fulcrum builds it again.`,
+      `Reindex requested. Deleting the ${target} database; Fulcrum builds it again.`,
     )
-    await discardIndex(effects, backend)
+    await discardIndex(effects, target)
     await rm(reindexRequest, { force: true })
   }
   await mkdir(dbDirOnVolume(backend), { recursive: true })
@@ -71,19 +82,23 @@ export const main = sdk.setupMain(async ({ effects }) => {
 
   // A node indexed for the first time (or again) builds with the larger, install-time database
   // memory, which the post-sync step below lowers once that node's index is complete.
+  // And the reverse: a node whose index is already built gets the lower value back, even if a
+  // build for another node raised it and was switched away from before it finished.
   const synced = (await storeJson.read((s) => s.synced).once()) ?? []
-  if (
-    !synced.includes(backend) &&
-    (await fulcrumConf.read((c) => c.db_mem).once()) === syncedDbMem() &&
-    syncedDbMem() < defaultDbMem()
-  ) {
-    await fulcrumConf.merge(effects, { db_mem: defaultDbMem() })
+  const dbMem = await fulcrumConf.read((c) => c.db_mem).once()
+  if (syncedDbMem() < defaultDbMem()) {
+    if (!synced.includes(backend) && dbMem === syncedDbMem())
+      await fulcrumConf.merge(effects, { db_mem: defaultDbMem() })
+    if (synced.includes(backend) && dbMem === defaultDbMem())
+      await fulcrumConf.merge(effects, { db_mem: syncedDbMem() })
   }
 
   // The node's RPC over the LXC bridge. When it prunes, this is its btc-rpc-proxy. The address
   // changes only when the node's binding does, so this .const() restarts Fulcrum on node
   // install/uninstall/port change and never on a node update. Null while the node is absent: the
-  // `bitcoind` line is then omitted and the .const() heals it in (one restart) when it appears.
+  // `bitcoind` line is then omitted, its volume is not mounted (a missing dependency's mount would
+  // fail the start), Fulcrum waits for a cookie that is not there and the health checks say so,
+  // and the .const() heals it all in (one restart) when the node appears.
   const rpc = await sdk.host
     .getBridgeAddress(effects, {
       packageId: backend,
@@ -93,46 +108,54 @@ export const main = sdk.setupMain(async ({ effects }) => {
     })
     .const()
 
+  const dataMount = sdk.Mounts.of().mountVolume({
+    volumeId: 'main',
+    subpath: null,
+    mountpoint: '/data',
+    readonly: false,
+  })
   const container = await sdk.SubContainer.of(
     effects,
     { imageId: 'main' },
-    sdk.Mounts.of()
-      .mountVolume({
-        volumeId: 'main',
-        subpath: null,
-        mountpoint: '/data',
-        readonly: false,
-      })
-      .mountDependency<typeof bitcoinManifest>({
-        // Any of the three; they share the volume id. The mountpoint is constant so the cookie
-        // path only ever changes with the chain.
-        dependencyId: backend as 'bitcoind',
-        volumeId: 'main',
-        subpath: null,
-        mountpoint: '/mnt/bitcoind',
-        readonly: true,
-      }),
+    rpc
+      ? dataMount.mountDependency<typeof bitcoinManifest>({
+          // Any of the three; they share the volume id. The mountpoint is constant so the cookie
+          // path only ever changes with the chain.
+          dependencyId: backend as 'bitcoind',
+          volumeId: 'main',
+          subpath: null,
+          mountpoint: '/mnt/bitcoind',
+          readonly: true,
+        })
+      : dataMount,
     'primary-sub',
   )
   const rootfs = await container.rootfs
 
   // Which chain the node is on, from the config it regenerates on every start. Mainnet writes no
-  // chain line; every other chain nests its data, cookie included, in a subdirectory named for it.
-  const nodeConf = await FileHelper.string(
-    `${rootfs}/mnt/bitcoind/bitcoin.conf`,
-  )
+  // chain line; every other chain nests its data, cookie included, in a subdirectory named for it
+  // (testnet's is `testnet3`). Followed by the derived chain, not the whole file, so a node
+  // settings change that leaves the chain alone does not restart Fulcrum.
+  const chainDirs = {
+    regtest: 'regtest',
+    testnet4: 'testnet4',
+    testnet: 'testnet3',
+    signet: 'signet',
+  } as const
+  const chain = await FileHelper.string(`${rootfs}/mnt/bitcoind/bitcoin.conf`)
     .read(
-      (c) => c,
-      (prev, next) => next === null || prev === next,
+      (conf) =>
+        (Object.keys(chainDirs) as (keyof typeof chainDirs)[]).find((c) =>
+          conf.split('\n').some((l) => l.trim() === `${c}=1`),
+        ) ?? null,
+      (prev, next) => prev === next,
     )
     .const(effects)
-  const chain =
-    (['regtest', 'testnet4', 'testnet', 'signet'] as const).find((c) =>
-      nodeConf?.split('\n').some((l) => l.trim() === `${c}=1`),
-    ) ?? null
   const cookiePath = chain
-    ? `/mnt/bitcoind/${chain}/.cookie`
+    ? `/mnt/bitcoind/${chainDirs[chain]}/.cookie`
     : '/mnt/bitcoind/.cookie'
+  const readCookie = () =>
+    readFile(`${rootfs}${cookiePath}`, 'utf8').catch(() => null)
 
   await fulcrumConf.merge(effects, {
     bitcoind: rpc ?? undefined,
@@ -202,23 +225,20 @@ export const main = sdk.setupMain(async ({ effects }) => {
             syncedNow = false
             await rm(reindexRequest, { force: true })
           }
-          // Mainnet only: the split height means nothing on a test chain. Best effort: with the
-          // node not up yet this does nothing, and runs again on the next respawn.
-          if (chain === null && rpc) {
-            const cookie = await readFile(
-              `${rootfs}${cookiePath}`,
-              'utf8',
-            ).catch(() => null)
-            const moved = cookie ? await guardChain(backend, rpc, cookie) : null
+          // Is the index still on the node's chain? See chainGuard.ts. Waits for the node when there
+          // is something to check; changes nothing if it never answers.
+          if (rpc) {
+            const moved = await guardChain(backend, rpc, readCookie)
             if (moved) {
               await markUnsynced(effects, backend)
               await storeJson.merge(effects, { indexesChangedAt: Date.now() })
+              await raiseDbMemForBuild(effects)
               syncedNow = false
               await sdk.notification.create(effects, {
                 level: 'warning',
                 title: i18n('Index set aside'),
                 message: i18n(
-                  'The address index for ${node} was built on the other side of the SHA256/BLAKE2b split from the node now installed under that name, so it cannot be used. It has been set aside and a new index is being built. Delete Unused Indexes removes the old one and frees its disk space.',
+                  'The address index for ${node} was built on another chain than the node now installed under that name (the other side of the SHA256/BLAKE2b split, or another network), so it cannot be used. It has been set aside and a new index is being built. Delete Unused Indexes removes the old one and frees its disk space.',
                   { node: node.title },
                 ),
               })
@@ -287,6 +307,22 @@ exec Fulcrum --ts-format none /data/fulcrum.conf`,
                   const done = /height: (\d+), ([\d.]+)%/.exec(line)
                   if (done)
                     progress = { height: Number(done[1]), percent: done[2] }
+                  // A height Fulcrum has indexed from this node, which is what the chain record may
+                  // be stamped from (chainGuard.ts). Fire and forget; it retries at the next line.
+                  const upToDate = /Block height (\d+), up-to-date/.exec(line)
+                  const indexed = done
+                    ? Number(done[1])
+                    : upToDate
+                      ? Number(upToDate[1])
+                      : null
+                  if (indexed !== null && rpc)
+                    readCookie()
+                      .then((cookie) =>
+                        cookie
+                          ? stampChain(backend, rpc, cookie, indexed)
+                          : undefined,
+                      )
+                      .catch(() => {})
                 }
                 // Bitcoin's answer for a block it has not downloaded yet; Fulcrum retries every 2 s.
                 if (
@@ -370,7 +406,7 @@ exec Fulcrum --ts-format none /data/fulcrum.conf`,
                     params,
                   )
                 : i18n(
-                    'Fulcrum is building its address index: ${percent}%, block ${indexed} of ${total}. On a pruned node, blocks it has discarded are fetched from the network one by one, so a first index takes a day or more, and several days over Tor.',
+                    'Fulcrum is building its address index: ${percent}%, block ${indexed} of ${total}. On a pruned node, blocks it has discarded are fetched from the network one by one, so a first index takes several days, and longer over Tor.',
                     params,
                   ),
             }
@@ -397,6 +433,9 @@ exec Fulcrum --ts-format none /data/fulcrum.conf`,
           const lowerDbMem =
             conf?.db_mem === defaultDbMem() && syncedDbMem() < defaultDbMem()
 
+          // Recorded first, so a oneshot stopped part way cannot announce twice.
+          await storeJson.merge(effects, { synced: [...already, backend] })
+          syncedNow = true
           await sdk.notification.create(effects, {
             level: 'success',
             title: i18n('Sync Complete'),
@@ -410,8 +449,6 @@ exec Fulcrum --ts-format none /data/fulcrum.conf`,
                   { node: node.title },
                 ),
           })
-          await storeJson.merge(effects, { synced: [...already, backend] })
-          syncedNow = true
 
           // Restarts main via the const above. The node is already recorded as synced, so the
           // rerun skips this block rather than looping.

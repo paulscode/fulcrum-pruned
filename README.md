@@ -65,9 +65,9 @@ the cookie on every request; the daemon waits up to 5 minutes for it before star
 |---|---|
 | `fulcrum.conf` | Fulcrum's config (file model `fileModels/fulcrum.conf.ts`) |
 | `banner.txt` | optional server banner (Configure) |
-| `store.json` | `backend` (selected node), `synced` (nodes whose index has completed) |
+| `store.json` | `backend` (selected node), `synced` (nodes whose index has completed), `indexesChangedAt` (written when an index is set aside or deleted, so Delete Unused Indexes re-evaluates) |
 | `db/<node id>/` | that node's Fulcrum datadir (`fulc2_db`, `latch`); about 190 GB on mainnet |
-| `db/<node id>.chain.json` | the node's block hash at 961640 when the index was made (chain guard) |
+| `db/<node id>.chain.json` | what the index was built on: genesis hash once Fulcrum is indexing, the block hash at 961640 once the index has passed it (chain guard) |
 | `db/<node id>.wrong-chain-<time>/` | an index set aside by the chain guard |
 | `reindex.request` | marker left by Reindex, consumed at the next start |
 
@@ -86,10 +86,14 @@ far past its 100-block undo depth; it exits fatally). So each node has its own d
 nothing is shared or trimmed. Switching back to a node indexed before is immediate; a new node is
 a full index.
 
-Because the `bitcoind` id can hold either chain, `chainGuard.ts` runs before each Fulcrum start
-(mainnet only): it records the node's hash at 961640 next to the database, and if a later node
-disagrees, renames the database to `<node id>.wrong-chain-<time>`, notifies, and lets Fulcrum
-build a new one.
+Because the `bitcoind` id can hold either chain (and a node can change network),
+`chainGuard.ts` keeps a record beside each database of what the index itself was built on: the
+genesis hash once Fulcrum is indexing (it exits on a genesis mismatch, so a moving index agrees),
+and the block hash at 961640 once the index has passed it, both taken from Fulcrum's log, never
+from whichever node happens to be connected. Before each start it waits for the node (up to five
+minutes) and, if the record disagrees, renames the database to `<node id>.wrong-chain-<time>`,
+notifies, and lets Fulcrum build a new one. A database with no record, or one still below the
+split, is valid on both chains and is never judged.
 
 ## Interfaces
 
@@ -129,7 +133,7 @@ its database is missing.
 
 - No txindex, no prune requirement, no ZeroMQ requirement.
 - About 190 GB per node indexed; Delete Unused Indexes reclaims it.
-- A first index against an already-pruned node takes a day or more (several days over Tor):
+- A first index against an already-pruned node takes several days (longer over Tor):
   every block below the prune point is fetched from peers through the proxy.
 - On the BLAKE2b chain, headers from 961640 are 164 bytes and served as such; only BLAKE2b-aware
   wallets can follow that chain.

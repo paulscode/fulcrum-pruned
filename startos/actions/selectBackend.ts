@@ -28,7 +28,7 @@ export const selectBackend = sdk.Action.withInput(
     // SHA256/BLAKE2b split, so nothing is shared or trimmed: switching to a node indexed before
     // is instant, and a node indexed for the first time is a full build.
     warning: i18n(
-      'Fulcrum keeps a separate address index for each node. Switching back to a node it has indexed before is immediate. A node it has not indexed yet needs a full index of its own: about 190 GB of disk, and a day or more on a pruned node (several days over Tor), during which wallets cannot connect. The previous index is kept; Delete Unused Indexes frees its space.',
+      'Fulcrum keeps a separate address index for each node. Switching back to a node it has indexed before is immediate. A node it has not indexed yet needs a full index of its own: about 190 GB of disk, and several days on a pruned node (longer over Tor), during which wallets cannot connect. The previous index is kept; Delete Unused Indexes frees its space.',
     ),
     allowedStatuses: 'any',
     group: null,

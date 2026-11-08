@@ -11,7 +11,7 @@ export const current = VersionInfo.of({
 - Built on privkeyio's BLAKE2b-aware Fulcrum, with five small patches for pruned nodes. server.features reports which side of the BLAKE2b fork the server follows.
 - Installs alongside Electrs Pruned, with different preferred ports.
 
-A first index against an already-pruned node takes a day or more, several days over Tor, and needs about 190 GB of disk.`,
+A first index against an already-pruned node takes several days, longer over Tor, and needs about 190 GB of disk.`,
   },
   migrations: {
     up: async () => {},

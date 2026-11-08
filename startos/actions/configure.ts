@@ -131,6 +131,14 @@ export const configure = sdk.Action.withInput(
     } else {
       await rm(bannerTxt.path, { force: true })
     }
-    await fulcrumConf.merge(effects, utils.nullToUndefined(conf))
+    // A cleared field goes back to this package's default, which its footnote shows, not to
+    // Fulcrum's own: Fulcrum's 30 s timeout and 3 clients are what the seeded values exist to avoid
+    // on a pruned node.
+    await fulcrumConf.merge(effects, {
+      ...utils.nullToUndefined(conf),
+      bitcoind_timeout: conf.bitcoind_timeout ?? defaultBitcoindTimeout,
+      bitcoind_clients: conf.bitcoind_clients ?? defaultBitcoindClients(),
+      db_mem: conf.db_mem ?? defaultDbMem(),
+    })
   },
 )

@@ -22,7 +22,7 @@ Fulcrum opens the Electrum interface only once its index has caught up with the 
 It depends on when you install it.
 
 - **Best: before or during your node's own initial sync.** Fulcrum indexes blocks as the node gets them, before pruning discards them.
-- **Slowest: onto a node that has been pruned for a long time.** Every block below the prune point is fetched from the network again. Expect **a day or more**, and **several days if your node is Tor-only**.
+- **Slowest: onto a node that has been pruned for a long time.** Every block below the prune point is fetched from the network again. Expect **several days**, and **longer if your node is Tor-only**.
 
 It happens once per node. An interrupted index resumes where it left off.
 
@@ -49,7 +49,7 @@ To serve blocks your node no longer stores, the proxy asks Bitcoin peers for the
 
 Fulcrum Pruned follows the chain of the node you select. Its `server.features` reply carries a `blake2b_fork` entry on the BLAKE2b chain (absent on SHA256), so a wallet or service can tell which side it is talking to. On the BLAKE2b chain, block headers from block 961,640 are 164 bytes: use a BLAKE2b-aware wallet there, such as the BLAKE2b build of Sparrow.
 
-If the node behind **Bitcoin Knots** is replaced by one on the other chain, Fulcrum notices, sets the old index aside with a notification, and builds a new one.
+If the node behind **Bitcoin Knots** is replaced by one on the other chain, Fulcrum notices, sets the old index aside with a notification, and builds a new one. (An index that has not yet reached the split, block 961,640, is valid on both chains and is kept.)
 
 ## Built on
 
