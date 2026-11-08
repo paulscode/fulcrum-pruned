@@ -17,7 +17,9 @@ COPY ./fulcrum .
 # The deltas this package carries over the fork; patches/README.md says what each one is for.
 # --fuzz=0 so a patch that no longer applies exactly fails the build instead of landing somewhere else.
 COPY ./patches ./.patches
-RUN set -e; for p in ./.patches/*.patch; do [ -e "$p" ] || continue; echo "applying $p"; patch -p1 --fuzz=0 <"$p"; done
+# And fail if there are none: a missing patches/ would otherwise build stock Fulcrum, which cannot
+# index a pruned node, without a word.
+RUN set -e; ls ./.patches/*.patch >/dev/null; for p in ./.patches/*.patch; do echo "applying $p"; patch -p1 --fuzz=0 <"$p"; done
 
 # The build context is a submodule checkout, whose .git is a file pointing outside it, so the .pro
 # file cannot derive the commit itself and the binary would report an empty one. The caller passes it.

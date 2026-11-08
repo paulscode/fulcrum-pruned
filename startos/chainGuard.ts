@@ -16,12 +16,20 @@ export const splitHeight = 961640
  */
 type ChainRecord = { genesis?: string; hashAtSplit?: string }
 
+const blockHash = /^[0-9a-f]{64}$/
+
+/**
+ * One RPC to the node. Rejects on anything but a well-formed answer, so a node that is starting,
+ * a proxy error page or an empty reply can never read as a different chain.
+ */
 async function rpc(
   address: string,
   cookie: string,
   method: string,
   params: unknown[],
+  signal?: AbortSignal,
 ): Promise<unknown> {
+  const timeout = AbortSignal.timeout(10_000)
   const res = await fetch(`http://${address}/`, {
     method: 'POST',
     headers: {
@@ -29,19 +37,44 @@ async function rpc(
       authorization: `Basic ${Buffer.from(cookie.trim()).toString('base64')}`,
     },
     body: JSON.stringify({ jsonrpc: '1.0', id: 'chain-guard', method, params }),
-    signal: AbortSignal.timeout(10_000),
+    signal: signal ? AbortSignal.any([signal, timeout]) : timeout,
   })
+  if (!res.ok) throw new Error(`HTTP ${String(res.status)}`)
   const body = (await res.json()) as { result?: unknown; error?: unknown }
   if (body.error) throw new Error(JSON.stringify(body.error))
+  if (body.result === undefined || body.result === null)
+    throw new Error('no result')
   return body.result
 }
+
+/** A block hash from the node, or a rejection. */
+async function hashAt(
+  address: string,
+  cookie: string,
+  height: number,
+  signal?: AbortSignal,
+): Promise<string> {
+  const hash = await rpc(address, cookie, 'getblockhash', [height], signal)
+  if (typeof hash !== 'string' || !blockHash.test(hash))
+    throw new Error('not a block hash')
+  return hash
+}
+
+/** Waits `ms`, or less if `signal` aborts. */
+const pause = (ms: number, signal: AbortSignal) =>
+  new Promise<void>((resolve) => {
+    const t = setTimeout(resolve, ms)
+    signal.addEventListener('abort', () => (clearTimeout(t), resolve()), {
+      once: true,
+    })
+  })
 
 async function readRecord(node: string): Promise<ChainRecord> {
   try {
     const parsed = JSON.parse(await readFile(chainRecordOnVolume(node), 'utf8'))
     const record: ChainRecord = {}
-    if (typeof parsed?.genesis === 'string') record.genesis = parsed.genesis
-    if (typeof parsed?.hashAtSplit === 'string')
+    if (blockHash.test(parsed?.genesis)) record.genesis = parsed.genesis
+    if (blockHash.test(parsed?.hashAtSplit))
       record.hashAtSplit = parsed.hashAtSplit
     return record
   } catch {
@@ -82,48 +115,54 @@ export async function guardChain(
   node: BackendId,
   address: string,
   readCookie: () => Promise<string | null>,
+  signal: AbortSignal,
 ): Promise<{ setAside: string } | null> {
   const record = await readRecord(node)
   if (!record.genesis && !record.hashAtSplit) return null
-  if (!existsSync(dbDirOnVolume(node))) {
+  // A record without an index (deleted by hand) describes nothing.
+  if (!existsSync(`${dbDirOnVolume(node)}/fulc2_db`)) {
     await forgetChain(node)
     return null
   }
 
+  // Everything the decision needs, in one go, or nothing. Bounded by the clock (five minutes) and
+  // cut short when the service is stopped or restarted, which waits for this to finish.
   let genesis: string | undefined
-  let height = 0
-  for (let attempt = 0; attempt < 60 && genesis === undefined; attempt++) {
+  let atSplit: string | null = null
+  const deadline = Date.now() + 300_000
+  while (genesis === undefined && !signal.aborted && Date.now() < deadline) {
     try {
       const cookie = await readCookie()
       if (!cookie) throw new Error('no cookie yet')
-      genesis = String(await rpc(address, cookie, 'getblockhash', [0]))
-      height = Number(await rpc(address, cookie, 'getblockcount', []))
+      const g = await hashAt(address, cookie, 0, signal)
+      const height = Number(
+        await rpc(address, cookie, 'getblockcount', [], signal),
+      )
+      if (!Number.isInteger(height) || height < 0)
+        throw new Error('not a height')
+      atSplit =
+        record.hashAtSplit && height >= splitHeight
+          ? await hashAt(address, cookie, splitHeight, signal)
+          : null
+      genesis = g
     } catch {
-      genesis = undefined
-      await new Promise((r) => setTimeout(r, 5_000))
+      await pause(5_000, signal)
     }
   }
   if (genesis === undefined) {
-    console.warn(
-      `Could not reach ${node} to check which chain the index is on; checking again on the next start.`,
-    )
+    if (!signal.aborted)
+      console.warn(
+        `Could not reach ${node} to check which chain the index is on; checking again on the next start.`,
+      )
     return null
   }
 
-  let wrong = record.genesis !== undefined && record.genesis !== genesis
-  let detail = wrong ? `genesis ${record.genesis}, node now ${genesis}` : ''
-  if (!wrong && record.hashAtSplit && height >= splitHeight) {
-    const cookie = await readCookie()
-    if (!cookie) return null
-    const atSplit = String(
-      await rpc(address, cookie, 'getblockhash', [splitHeight]).catch(() => ''),
-    )
-    if (atSplit && atSplit !== record.hashAtSplit) {
-      wrong = true
-      detail = `hash at ${String(splitHeight)} ${record.hashAtSplit}, node now ${atSplit}`
-    }
-  }
-  if (!wrong) return null
+  let detail = ''
+  if (record.genesis && record.genesis !== genesis)
+    detail = `genesis ${record.genesis}, node now ${genesis}`
+  else if (record.hashAtSplit && atSplit && atSplit !== record.hashAtSplit)
+    detail = `hash at ${String(splitHeight)} ${record.hashAtSplit}, node now ${atSplit}`
+  if (!detail) return null
 
   const stamp = new Date()
     .toISOString()
@@ -159,12 +198,9 @@ export async function stampChain(
   const wantSplit = indexedHeight >= splitHeight && !record.hashAtSplit
   if (record.genesis && !wantSplit) return
   try {
-    if (!record.genesis)
-      record.genesis = String(await rpc(address, cookie, 'getblockhash', [0]))
+    if (!record.genesis) record.genesis = await hashAt(address, cookie, 0)
     if (wantSplit)
-      record.hashAtSplit = String(
-        await rpc(address, cookie, 'getblockhash', [splitHeight]),
-      )
+      record.hashAtSplit = await hashAt(address, cookie, splitHeight)
     await writeRecord(node, record)
   } catch {
     // tried again at the next progress line

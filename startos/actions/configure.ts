@@ -1,5 +1,6 @@
 import { utils } from '@start9labs/start-sdk'
 import { rm } from 'fs/promises'
+import { availableParallelism, totalmem } from 'os'
 import { sdk } from '../sdk'
 import { i18n } from '../i18n'
 import {
@@ -34,6 +35,8 @@ const inputSpec = InputSpec.of({
     default: null,
     integer: true,
     min: 30,
+    // Fulcrum refuses more than 600 and would not start.
+    max: 600,
     footnote: `${i18n('Default')}: ${String(defaultBitcoindTimeout)}`,
   }),
   bitcoind_clients: Value.number({
@@ -57,6 +60,8 @@ const inputSpec = InputSpec.of({
     default: null,
     integer: true,
     min: 0,
+    // Fulcrum exits when asked for more threads than there are cores.
+    max: availableParallelism(),
     footnote: `${i18n('Default')}: 0 (auto)`,
   }),
   db_mem: Value.number({
@@ -68,6 +73,8 @@ const inputSpec = InputSpec.of({
     default: null,
     integer: true,
     min: 50,
+    // Over half the RAM, the cache gets Fulcrum killed once it fills.
+    max: Math.floor((totalmem() * 0.5) / (1024 * 1024)),
     footnote: `${i18n('Default')}: ${defaultDbMem()} MiB`,
   }),
   db_max_open_files: Value.number({

@@ -1,6 +1,7 @@
 import { FileHelper, T } from '@start9labs/start-sdk'
 import { existsSync } from 'fs'
 import { mkdir, readFile, rm, writeFile } from 'fs/promises'
+import { availableParallelism, totalmem } from 'os'
 import { StringDecoder } from 'string_decoder'
 import { manifest as bitcoinManifest } from 'bitcoin-core-startos/startos/manifest'
 import { BackendId, backends, defaultBackend, isBackendId } from './backends'
@@ -157,10 +158,19 @@ export const main = sdk.setupMain(async ({ effects }) => {
   const readCookie = () =>
     readFile(`${rootfs}${cookiePath}`, 'utf8').catch(() => null)
 
+  // Values Fulcrum would refuse or that cannot work on this machine, which can arrive by a restore
+  // or a disk moved to a smaller server as well as by Configure: more worker threads than cores
+  // (Fulcrum exits), or a database cache over half the RAM (killed once it fills).
+  const current = await fulcrumConf.read().once()
+  const maxDbMem = Math.floor((totalmem() * 0.5) / (1024 * 1024))
   await fulcrumConf.merge(effects, {
     bitcoind: rpc ?? undefined,
     datadir: dbDirInContainer(backend),
     rpccookie: cookiePath,
+    ...((current?.worker_threads ?? 0) > availableParallelism() && {
+      worker_threads: undefined,
+    }),
+    ...((current?.db_mem ?? 0) > maxDbMem && { db_mem: maxDbMem }),
   })
 
   // Consted *after* the merge above, so that write is already part of the captured value.
@@ -206,13 +216,37 @@ export const main = sdk.setupMain(async ({ effects }) => {
   // Clients can put text in the log once Fulcrum listens, and the index checks all run before that.
   let listening = false
   let syncedNow = synced.includes(backend)
+  // Fulcrum's last FATAL line, kept across respawns and cleared only by real progress, so a crash
+  // loop shows as a failure with its reason instead of "starting" forever.
+  let lastFatal: string | null = null
+  const noteFatal = (text: string) => {
+    const at = text.indexOf('FATAL: ')
+    if (at >= 0)
+      lastFatal = text
+        .slice(at + 'FATAL: '.length)
+        .split('\n')[0]
+        .trim()
+        .slice(0, 300)
+  }
+  const crashLoop = () =>
+    lastFatal
+      ? ({
+          result: 'failure',
+          message: i18n(
+            'Fulcrum keeps stopping: ${error} See the logs. If they report a corrupted database, run Reindex.',
+            { error: lastFatal },
+          ),
+        } as const)
+      : null
 
   return sdk.Daemons.of(effects)
     .addDaemon('primary', {
       subcontainer: container,
       exec: {
         // The SDK calls fn on every respawn, so a restarted Fulcrum inherits no partial line or progress.
-        fn: async () => {
+        // The SDK calls fn with an abort signal, and a stop or restart waits for fn to finish, so
+        // anything slow in here (the chain guard waits for the node) must give way to it.
+        fn: async (_, signal) => {
           lastSyncLog = null
           progress = null
           missingBlockAt = 0
@@ -220,19 +254,28 @@ export const main = sdk.setupMain(async ({ effects }) => {
           listening = false
           if (unreadableIndex) {
             unreadableIndex = false
-            await writeFile(reindexRequest, '')
+            // Names the node, so a main restart between here and the rm below cannot turn the
+            // marker on whichever node is selected by then.
+            await writeFile(reindexRequest, backend)
             await discardIndex(effects, backend)
             syncedNow = false
             await rm(reindexRequest, { force: true })
+            await sdk.notification.create(effects, {
+              level: 'warning',
+              title: i18n('Index rebuilt'),
+              message: i18n(
+                'Fulcrum could not read the address index for ${node} (written in an incompatible format, or damaged), so it has been deleted and is being built again. If this happens more than once, check the drive.',
+                { node: node.title },
+              ),
+            })
           }
           // Is the index still on the node's chain? See chainGuard.ts. Waits for the node when there
           // is something to check; changes nothing if it never answers.
           if (rpc) {
-            const moved = await guardChain(backend, rpc, readCookie)
+            const moved = await guardChain(backend, rpc, readCookie, signal)
             if (moved) {
-              await markUnsynced(effects, backend)
-              await storeJson.merge(effects, { indexesChangedAt: Date.now() })
-              await raiseDbMemForBuild(effects)
+              // Told first: the index is already moved, and nothing below may stop the user
+              // hearing why their wallets are waiting for a rebuild.
               syncedNow = false
               await sdk.notification.create(effects, {
                 level: 'warning',
@@ -242,8 +285,14 @@ export const main = sdk.setupMain(async ({ effects }) => {
                   { node: node.title },
                 ),
               })
+              await markUnsynced(effects, backend).catch(console.error)
+              await storeJson
+                .merge(effects, { indexesChangedAt: Date.now() })
+                .catch(console.error)
+              await raiseDbMemForBuild(effects).catch(console.error)
             }
           }
+          if (signal.aborted) return null
           let pending = ''
           const decoder = new StringDecoder('utf8')
           return {
@@ -258,16 +307,27 @@ export const main = sdk.setupMain(async ({ effects }) => {
 done
 exec Fulcrum --ts-format none /data/fulcrum.conf`,
             ],
+            // Fulcrum logs to stdout; stderr carries signal and loader messages, and must be read
+            // or a full pipe would block it.
+            onStderr: (chunk) => {
+              const text = Buffer.isBuffer(chunk)
+                ? chunk.toString('utf8')
+                : String(chunk)
+              console.error(text)
+              noteFatal(text)
+            },
             onStdout: (chunk) => {
               const lines = (pending + decoder.write(chunk)).split('\n')
               pending = lines.pop() ?? ''
               for (const line of lines) {
                 console.log(line)
+                noteFatal(line)
 
                 if (
                   line.includes('Service started, listening for connections')
                 ) {
                   listening = true
+                  lastFatal = null
                 }
 
                 // An index written by a build with an incompatible header format: Fulcrum reports it
@@ -307,6 +367,7 @@ exec Fulcrum --ts-format none /data/fulcrum.conf`,
                   const done = /height: (\d+), ([\d.]+)%/.exec(line)
                   if (done)
                     progress = { height: Number(done[1]), percent: done[2] }
+                  if (done || /up-to-date/.test(line)) lastFatal = null
                   // A height Fulcrum has indexed from this node, which is what the chain record may
                   // be stamped from (chainGuard.ts). Fire and forget; it retries at the next line.
                   const upToDate = /Block height (\d+), up-to-date/.exec(line)
@@ -350,6 +411,8 @@ exec Fulcrum --ts-format none /data/fulcrum.conf`,
           if (!(await nodeCookiePresent())) {
             return { result: 'starting', message: waitingForNode() }
           }
+          const failing = crashLoop()
+          if (failing) return failing
           if (converting) {
             return {
               result: 'loading',
@@ -385,6 +448,9 @@ exec Fulcrum --ts-format none /data/fulcrum.conf`,
           if (!(await nodeCookiePresent())) {
             return { result: 'loading', message: waitingForNode() }
           }
+
+          const failing = crashLoop()
+          if (failing) return failing
 
           if (Date.now() - missingBlockAt < 30_000)
             return {
