@@ -1,7 +1,7 @@
 From 815e64a32f411197d1d5d1b04474abc0d6d1d2aa Mon Sep 17 00:00:00 2001
 From: Paul Lamb <paul@paulscode.com>
 Date: Sun, 8 Nov 2026 14:39:34 -0600
-Subject: [PATCH 6/6] Servers: report the BLAKE2b fork point in server.features
+Subject: [PATCH 6/7] Servers: report the BLAKE2b fork point in server.features
 
 genesis_hash cannot tell the SHA256 and BLAKE2b chains apart: the forked
 chain keeps the original's history, genesis included. A client, or a

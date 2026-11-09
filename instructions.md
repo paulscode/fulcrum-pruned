@@ -49,6 +49,8 @@ To serve blocks your node no longer stores, the proxy asks Bitcoin peers for the
 
 Fulcrum Pruned follows the chain of the node you select. Its `server.features` reply carries a `blake2b_fork` entry on the BLAKE2b chain (absent on SHA256), so a wallet or service can tell which side it is talking to. On the BLAKE2b chain, block headers from block 961,640 are 164 bytes: use a BLAKE2b-aware wallet there, such as the BLAKE2b build of Sparrow.
 
+Fulcrum Pruned speaks Electrum protocol 1.4 to 1.6, and 1.8. Protocol 1.8 is the version for 164-byte headers, and the one Electrs Pruned uses on the BLAKE2b chain, so a wallet or service that works with Electrs Pruned works here too. Wallets that ask for an older version are still served, as before.
+
 If the node behind **Bitcoin Knots** is replaced by one on the other chain, Fulcrum notices, sets the old index aside with a notification, and builds a new one. (An index that has not yet reached the split, block 961,640, is valid on both chains and is kept.)
 
 ## Limitations

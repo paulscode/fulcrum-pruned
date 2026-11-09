@@ -10,7 +10,7 @@
 > `instructions.md` for links.
 
 Fulcrum Pruned is [Fulcrum](https://github.com/cculianu/Fulcrum), a fast Electrum server, through
-[privkeyio's BLAKE2b-aware fork](https://github.com/privkeyio/Fulcrum), with six patches that let
+[privkeyio's BLAKE2b-aware fork](https://github.com/privkeyio/Fulcrum), with seven patches that let
 it index and serve a **pruned** Bitcoin node through the node's btc-rpc-proxy. It follows either
 chain, SHA256 or BLAKE2b, through Select Node, and installs alongside Electrs Pruned (a different
 package id), so a server with two pruned nodes can run an Electrum server for each.
@@ -49,6 +49,7 @@ x86_64 and aarch64 and never offered under emulation. The binary reports its com
 | 0004 | `blockchain.transaction.get` names the block, found in Fulcrum's own index, so no `txindex` is needed; counted against the client's throttle as it is read; given `bitcoind_timeout`; the reply must be the transaction asked for; a txid not in the index gets "not in the index of this server" instead of the node's txindex advice. |
 | 0005 | The startup check asks for transaction #1 by its block and, on failure, names the proxy; it stops after three failures. |
 | 0006 | `server.features.blake2b_fork = {height, hash, header_bytes: 164, block_hash: "blake2b"}` on a chain with extended headers, absent otherwise (the shape Electrs Pruned uses). |
+| 0007 | Electrum protocol 1.8 is offered beside 1.4 to 1.6, on both chains (no 1.7); `protocol_max` is 1.8; at 1.8 `blockchain.block.headers` answers with the concatenated hex string, as Electrs Pruned does. Peering keeps 1.6. |
 
 One subcontainer, `primary-sub`, runs the daemon `primary`: a short shell loop that waits up to five
 minutes for the node's RPC cookie, then `Fulcrum --ts-format none /data/fulcrum.conf`.
@@ -114,7 +115,8 @@ One interface, `main` ("Electrum (SSL)"), on host `main`, container port 50001: 
 protocol, TLS terminated by StartOS. It prefers external ports 50012 (SSL) and 50011 (TCP), so a
 server running Electrs Pruned (50002/50001) gets different ones; the plain TCP port is reachable only
 over the LXC bridge. Fulcrum opens the port only once its index has caught up with the node, so
-wallets cannot connect during a first index. `startos/utils.ts` exports `mainHostId` and
+wallets cannot connect during a first index. Clients may negotiate Electrum protocol 1.4 to 1.6 or 1.8
+(patch 0007), on either chain. `startos/utils.ts` exports `mainHostId` and
 `electrumPort` for dependents.
 
 ## Installation and First-Run Flow
@@ -184,7 +186,8 @@ Complete fires again.
 4. A wallet looking up an old transaction on a pruned node waits for its block to be fetched from
    peers (seconds, up to `bitcoind_timeout`).
 5. On the BLAKE2b chain, headers from block 961640 are 164 bytes: only BLAKE2b-aware wallets follow
-   it.
+   it. Such a wallet negotiates protocol 1.8; one asking for 1.4 to 1.6 is still served (Electrs Pruned
+   refuses it there), and gets 164-byte headers it may not read.
 6. A node replaced under the same id by one on another chain or network: the chain guard sets the
    old index aside and builds a new one, once the new node has reached the block that tells them
    apart (961640, or genesis for another network).

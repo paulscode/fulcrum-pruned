@@ -7,10 +7,13 @@ spikes/test-all.log
 # Regtest harness state (setup.sh up / fulcrum / clean)
 spikes/harness/node*/
 spikes/harness/fulcrum-db/
+spikes/harness/electrs-db/
 spikes/harness/fulcrum.conf
 spikes/harness/proxy.toml
+spikes/harness/electrs.toml
 spikes/harness/txs.json
 spikes/harness/chain
 spikes/harness/activation
 spikes/**/*.log
 spikes/**/*.pid
+spikes/**/__pycache__/

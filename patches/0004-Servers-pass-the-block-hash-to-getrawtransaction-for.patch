@@ -1,7 +1,7 @@
 From 094efa6b5c9295c9189e2f63256f148c19a1fb76 Mon Sep 17 00:00:00 2001
 From: Paul Lamb <paul@paulscode.com>
 Date: Sun, 8 Nov 2026 14:35:35 -0600
-Subject: [PATCH 4/6] Servers: pass the block hash to getrawtransaction for an
+Subject: [PATCH 4/7] Servers: pass the block hash to getrawtransaction for an
  indexed transaction
 
 blockchain.transaction.get forwarded getrawtransaction <txid> <verbose>

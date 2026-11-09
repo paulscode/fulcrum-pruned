@@ -1,0 +1,294 @@
+From f7b1b033697cb45727fca4ce095d5d5032f825d7 Mon Sep 17 00:00:00 2001
+From: Paul Lamb <paul@paulscode.com>
+Date: Sun, 8 Nov 2026 22:01:31 -0600
+Subject: [PATCH 7/7] Servers: negotiate Electrum protocol 1.8
+
+Offer protocol 1.8 from the draft "Electrum protocol: variable-length
+block headers" beside 1.4 to 1.6, on every chain. A 1.8 client reads each
+header's length from bit 31 of its version field (80 or 164 bytes) and
+knows a v2 header's block is identified by its BLAKE2b hash. This is the
+version Electrs Pruned speaks on the BLAKE2b chain, so a tool that works
+with it gets the same here.
+
+- server.version: a single version is accepted if it is 1.4 to 1.6 (as
+  before) or exactly 1.8. A range gets the highest supported version in
+  it: 1.8 if it reaches 1.8, otherwise the lower of its top and 1.6, and
+  is refused if that is below its bottom. There is no 1.7, whose changes
+  are not implemented: [1.4, 1.7] gets 1.6, and [1.7, 1.7] is refused.
+  The decision is ServerMisc::NegotiateProtocol, a pure function with
+  unit tests (tests/Protocol_tests.cpp).
+- server.features: protocol_max is "1.8". protocol_min/protocol_max
+  cannot say that 1.7 is missing; a client sending a range still gets
+  the right answer.
+- blockchain.block.headers: a list from 1.6 as before, but the
+  concatenated hex string again at 1.8 (ServerMisc::HeadersAsList). A 1.8
+  client must read both; Electrs Pruned at 1.8 sends the string, so a tool
+  written against it may parse only that. The string branch already walks
+  variable-length headers.
+
+Clients below 1.8 are still served on a chain with v2 headers, as before;
+this only adds a version.
+
+ServerMisc::MaxProtocolVersion stays 1.6: PeerMgr judges other servers by
+it and makeFeaturesDictForConnection is shared with PeerMgr, so peering
+is not taught about 1.8 (Fulcrum Pruned runs with peering and announce
+off). Fulcrum --version shows both.
+---
+ Fulcrum.pro                  |  1 +
+ src/App.cpp                  |  3 +-
+ src/ServerMisc.cpp           | 20 ++++++++++
+ src/ServerMisc.h             | 25 ++++++++++++
+ src/Servers.cpp              | 20 ++++++----
+ src/tests/Protocol_tests.cpp | 77 ++++++++++++++++++++++++++++++++++++
+ 6 files changed, 137 insertions(+), 9 deletions(-)
+ create mode 100644 src/tests/Protocol_tests.cpp
+
+diff --git a/Fulcrum.pro b/Fulcrum.pro
+index 9e78228..fcf1bff 100644
+--- a/Fulcrum.pro
++++ b/Fulcrum.pro
+@@ -466,6 +466,7 @@ contains(DEFINES, ENABLE_TESTS) {
+     SOURCES += \
+         tests/BlockHeader_tests.cpp \
+         tests/ByteView_tests.cpp \
++        tests/Protocol_tests.cpp \
+         tests/Util_tests.cpp \
+         tests/VarInt_tests.cpp
+ }
+diff --git a/src/App.cpp b/src/App.cpp
+index bed23c7..d1d83b8 100644
+--- a/src/App.cpp
++++ b/src/App.cpp
+@@ -1934,7 +1934,8 @@ QString App::extendedVersionString(bool justLibs)
+     if (!justLibs) {
+         ts << applicationName() << " " << applicationVersion() << "\n";
+         ts << "Protocol: version min: " << ServerMisc::MinProtocolVersion.toString()
+-           << ", version max: " << ServerMisc::MaxProtocolVersion.toString() << "\n";
++           << ", version max: " << ServerMisc::ProtocolVersionHeaderLengths.toString()
++           << " (1.7 not offered; peering up to " << ServerMisc::MaxProtocolVersion.toString() << ")\n";
+         if (auto compiler = getCompiler(); !compiler.isEmpty())
+             ts << "compiled: " << compiler << "\n";
+     }
+diff --git a/src/ServerMisc.cpp b/src/ServerMisc.cpp
+index a8b9cb3..1b5d4cf 100644
+--- a/src/ServerMisc.cpp
++++ b/src/ServerMisc.cpp
+@@ -1,6 +1,8 @@
+ #include "Common.h"
+ #include "ServerMisc.h"
+ 
++#include <algorithm>
++
+ namespace ServerMisc
+ {
+     const QString AppVersion(VERSION);
+@@ -9,4 +11,22 @@ namespace ServerMisc
+     // cannot tell the two apart has no way to know which rules the data it is given came from. Kept out of
+     // VERSION so that macro stays equal to upstream's and release merges do not conflict on it.
+     const QString AppSubVersion = QString("%1 %2+blake2b").arg(APPNAME, VERSION);
++
++    Version NegotiateProtocol(std::optional<Version> clientMin, const Version &clientMax)
++    {
++        const auto supported = [](const Version &v) {
++            return (v >= MinProtocolVersion && v <= MaxProtocolVersion) || v == ProtocolVersionHeaderLengths;
++        };
++        if (!clientMax.isValid())
++            return Version();
++        if (!clientMin)
++            return supported(clientMax) ? clientMax : Version();
++        if (!clientMin->isValid() || *clientMin > clientMax)
++            return Version();
++        const Version pick = clientMax >= ProtocolVersionHeaderLengths ? ProtocolVersionHeaderLengths
++                                                                       : std::min(clientMax, MaxProtocolVersion);
++        if (pick < std::max(*clientMin, MinProtocolVersion))
++            return Version();
++        return pick;
++    }
+ }
+diff --git a/src/ServerMisc.h b/src/ServerMisc.h
+index 87ea528..a268a47 100644
+--- a/src/ServerMisc.h
++++ b/src/ServerMisc.h
+@@ -22,6 +22,8 @@
+ 
+ #include <QString>
+ 
++#include <optional>
++
+ namespace ServerMisc
+ {
+     inline constexpr auto HashFunction = "sha256";
+@@ -32,6 +34,29 @@ namespace ServerMisc
+     /// in e.g. listunspent and get_balance.
+     inline constexpr Version MinTokenAwareProtocolVersion{1, 5, 0};
+ 
++    /// Electrum protocol 1.8, from the draft "Electrum protocol: variable-length block headers": the client reads each
++    /// header's length from bit 31 of its version field (80 or 164 bytes) and knows a v2 header's block is identified
++    /// by its BLAKE2b hash. Offered to clients on every chain, beside 1.4 to MaxProtocolVersion; there is no 1.7, whose
++    /// changes are not implemented. MaxProtocolVersion is left at 1.6 because PeerMgr judges other servers by it, and
++    /// this server neither peers nor announces itself as a 1.8 server.
++    inline constexpr Version ProtocolVersionHeaderLengths{1, 8, 0};
++
++    /// The protocol version to agree with a client that sent `server.version` with `clientMax` alone (`clientMin`
++    /// empty) or the range [`clientMin`, `clientMax`]. Returns an invalid Version to refuse.
++    ///
++    /// Supported: MinProtocolVersion to MaxProtocolVersion, and ProtocolVersionHeaderLengths. A single version is
++    /// accepted if it is one of those. A range gets the highest supported version within it: 1.8 if it reaches 1.8,
++    /// else the lower of its top and 1.6; refused if that is below the range's bottom (or below 1.4).
++    Version NegotiateProtocol(std::optional<Version> clientMin, const Version &clientMax);
++
++    /// Whether `blockchain.block.headers` answers with a list of hex headers rather than one concatenated hex string:
++    /// a list from 1.6 (as Fulcrum has since 1.6), and the concatenated string again at 1.8. A 1.8 client reads
++    /// either; Electrs Pruned, which speaks 1.8 on the BLAKE2b chain, sends the string, so a tool written against it
++    /// gets the same reply here.
++    constexpr bool HeadersAsList(const Version &protocolVersion) noexcept {
++        return protocolVersion >= Version{1, 6, 0} && protocolVersion < ProtocolVersionHeaderLengths;
++    }
++
+     extern const QString AppVersion,  ///< in string form suitable for sending in protocol or banner e.g. "2.0"
+                          AppSubVersion; ///< e.g. "Fulcrum 2.0"
+ 
+diff --git a/src/Servers.cpp b/src/Servers.cpp
+index 0dad759..ffabeb4 100644
+--- a/src/Servers.cpp
++++ b/src/Servers.cpp
+@@ -1224,6 +1224,10 @@ void Server::rpc_server_features(Client *c, const RPC::BatchId batchId, const RP
+                                                          /* cashTokens = */ isBCH,
+                                                          /* rpaStartHeight = */ storage->getConfiguredRpaStartHeight(),
+                                                          rsi.hasSubmitPackageRPC);
++    // Clients may also negotiate 1.8 (variable-length headers), on every chain. protocol_min/protocol_max cannot say
++    // that 1.7 is not offered; a client asking for a range gets the highest version this server has in it. Set here
++    // rather than in makeFeaturesDictForConnection, which PeerMgr shares and which keeps MaxProtocolVersion.
++    features["protocol_max"] = ServerMisc::ProtocolVersionHeaderLengths.toString();
+     // Which side of the BLAKE2b fork this server follows. genesis_hash cannot say: the forked chain keeps the
+     // original's history, genesis included. Reported as the fork point, in the same shape Electrs Pruned uses, so a
+     // client (or a service choosing a backend) can tell the chains apart and check it against the headers it is
+@@ -1289,13 +1293,12 @@ void Server::rpc_server_version(Client *c, const RPC::BatchId batchId, const RPC
+         if (!cMin.isValid() || !cMax.isValid() || cMin > cMax)
+             throw RPCErrorWithDisconnect(QString("Bad version tuple: %1").arg(sl.join(", ")));
+ 
+-        pver = std::min(cMax, ServerMisc::MaxProtocolVersion);
+-        if (pver < std::max(cMin, ServerMisc::MinProtocolVersion))
+-            pver = Version();
++        pver = ServerMisc::NegotiateProtocol(cMin, cMax); // 1.4 to 1.6, or 1.8 (see ServerMisc.h)
+     } else {
+-        pver = l[1].toString().left(kMaxServerVersionLen); // try and parse version, see Version.cpp, QString constructor.
++        // try and parse version, see Version.cpp, QString constructor.
++        pver = ServerMisc::NegotiateProtocol(std::nullopt, Version(l[1].toString().left(kMaxServerVersionLen)));
+     }
+-    if (!pver.isValid() || pver < ServerMisc::MinProtocolVersion || pver > ServerMisc::MaxProtocolVersion)
++    if (!pver.isValid())
+         throw RPCErrorWithDisconnect("Unsupported protocol version");
+ 
+     c->info.userAgent = l[0].toString().left(kMaxServerVersionLen);
+@@ -1392,7 +1395,8 @@ void Server::rpc_blockchain_block_headers(Client *c, const RPC::BatchId batchId,
+             throw RPCError(QString("header height + (count - 1) %1 must be <= cp_height %2 which must be <= chain height %3")
+                            .arg(height + (count - 1)).arg(cp_height).arg(tip));
+     }
+-    const bool headersAsList = c->info.protocolVersion >= Version{1, 6, 0}; // in protocol 1.6.0 we return a list, not a concatenated string
++    // A list of hex headers from protocol 1.6, a concatenated string below 1.6 and again at 1.8 (see ServerMisc.h)
++    const bool headersAsList = ServerMisc::HeadersAsList(c->info.protocolVersion);
+     generic_do_async(c, batchId, m.id, [height, count, cp_height, headersAsList, this] {
+         // EX doesn't seem to return error here if invalid height/no results, so we will do same.
+         const auto hdrs = storage->headersFromHeight(height, std::min(count, MAX_COUNT));
+@@ -1412,7 +1416,7 @@ void Server::rpc_blockchain_block_headers(Client *c, const RPC::BatchId batchId,
+             return hdr;
+         };
+         if (headersAsList) {
+-            // Protocol version 1.6.0 and above, return a list of hex headers
++            // Protocol version 1.6 up to (not including) 1.8, return a list of hex headers
+             QVariantList headers;
+             headers.reserve(nHdrs);
+             for (size_t i = 0; i < nHdrs; ++i) {
+@@ -1421,7 +1425,7 @@ void Server::rpc_blockchain_block_headers(Client *c, const RPC::BatchId batchId,
+             }
+             resp["headers"] = headers;
+         } else {
+-            // Protocol version < 1.6.0, return a concatenated string of header hex. Note that with the BLAKE2b
++            // Protocol version < 1.6.0 or >= 1.8, return a concatenated string of header hex. Note that with the BLAKE2b
+             // past the activation headers are no longer all the same size, so this blob must be split by reading each
+             // header's version field, rather than at a fixed stride.
+             size_t totalHexSz = 0;
+diff --git a/src/tests/Protocol_tests.cpp b/src/tests/Protocol_tests.cpp
+new file mode 100644
+index 0000000..8638192
+--- /dev/null
++++ b/src/tests/Protocol_tests.cpp
+@@ -0,0 +1,77 @@
++//
++// Fulcrum - A fast & nimble SPV Server for Bitcoin Cash
++// Copyright (C) 2019-2026 Calin A. Culianu <calin.culianu@gmail.com>
++//
++// This program is free software: you can redistribute it and/or modify
++// it under the terms of the GNU General Public License as published by
++// the Free Software Foundation, either version 3 of the License, or
++// (at your option) any later version.
++//
++// This program is distributed in the hope that it will be useful,
++// but WITHOUT ANY WARRANTY; without even the implied warranty of
++// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++// GNU General Public License for more details.
++//
++// You should have received a copy of the GNU General Public License
++// along with this program (see LICENSE.txt).  If not, see
++// <https://www.gnu.org/licenses/>.
++//
++#include "ServerMisc.h"
++#include "Tests.h"
++#include "Version.h"
++
++#include <QString>
++
++#include <optional>
++
++namespace {
++
++/// The negotiated version as a string, "refused" for an invalid one. `min` empty means a single version was sent.
++QString negotiate(const char *min, const char *max) {
++    const std::optional<Version> clientMin = min ? std::optional<Version>(Version(QString(min))) : std::nullopt;
++    const Version v = ServerMisc::NegotiateProtocol(clientMin, Version(QString(max)));
++    return v.isValid() ? v.toString() : QStringLiteral("refused");
++}
++
++} // namespace
++
++TEST_SUITE(protocol)
++
++TEST_CASE(single_version) {
++    // 1.4 to 1.6 as before, and exactly 1.8; no 1.7, nothing above 1.8
++    TEST_CHECK_EQUAL(negotiate(nullptr, "1.3"), QString("refused"));
++    TEST_CHECK_EQUAL(negotiate(nullptr, "1.4"), QString("1.4"));
++    TEST_CHECK_EQUAL(negotiate(nullptr, "1.4.2"), QString("1.4.2"));
++    TEST_CHECK_EQUAL(negotiate(nullptr, "1.5"), QString("1.5"));
++    TEST_CHECK_EQUAL(negotiate(nullptr, "1.6"), QString("1.6"));
++    TEST_CHECK_EQUAL(negotiate(nullptr, "1.7"), QString("refused"));
++    TEST_CHECK_EQUAL(negotiate(nullptr, "1.8"), QString("1.8"));
++    TEST_CHECK_EQUAL(negotiate(nullptr, "1.8.1"), QString("refused"));
++    TEST_CHECK_EQUAL(negotiate(nullptr, "1.9"), QString("refused"));
++    TEST_CHECK_EQUAL(negotiate(nullptr, "garbage"), QString("refused"));
++};
++
++TEST_CASE(version_range) {
++    // the highest supported version within the range
++    TEST_CHECK_EQUAL(negotiate("1.3", "1.4.2"), QString("1.4.2"));
++    TEST_CHECK_EQUAL(negotiate("1.4", "1.6"), QString("1.6"));   // unchanged from before 1.8
++    TEST_CHECK_EQUAL(negotiate("1.4", "1.7"), QString("1.6"));   // 1.7 is not offered
++    TEST_CHECK_EQUAL(negotiate("1.3", "1.8"), QString("1.8"));
++    TEST_CHECK_EQUAL(negotiate("1.7", "1.8"), QString("1.8"));
++    TEST_CHECK_EQUAL(negotiate("1.4", "2.0"), QString("1.8"));
++    TEST_CHECK_EQUAL(negotiate("1.7", "1.7"), QString("refused"));
++    TEST_CHECK_EQUAL(negotiate("1.9", "2.0"), QString("refused"));
++    TEST_CHECK_EQUAL(negotiate("1.0", "1.3"), QString("refused"));
++    TEST_CHECK_EQUAL(negotiate("1.8", "1.4"), QString("refused")); // reversed
++};
++
++TEST_CASE(headers_reply_form) {
++    // blockchain.block.headers: a concatenated hex string below 1.6 and at 1.8, a list from 1.6 to below 1.8
++    TEST_CHECK(!ServerMisc::HeadersAsList(Version{1, 4, 0}));
++    TEST_CHECK(!ServerMisc::HeadersAsList(Version{1, 4, 2}));
++    TEST_CHECK(!ServerMisc::HeadersAsList(Version{1, 5, 0}));
++    TEST_CHECK(ServerMisc::HeadersAsList(Version{1, 6, 0}));
++    TEST_CHECK(!ServerMisc::HeadersAsList(Version{1, 8, 0}));
++};
++
++TEST_SUITE_END()

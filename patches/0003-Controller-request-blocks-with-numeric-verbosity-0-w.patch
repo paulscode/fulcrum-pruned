@@ -1,7 +1,7 @@
 From 2959301d433b2c2b5787ff360edba1f08681aacb Mon Sep 17 00:00:00 2001
 From: Paul Lamb <paul@paulscode.com>
 Date: Sun, 8 Nov 2026 20:01:48 -0600
-Subject: [PATCH 3/6] Controller: request blocks with numeric verbosity 0 where
+Subject: [PATCH 3/7] Controller: request blocks with numeric verbosity 0 where
  the node takes it
 
 getblock <hash> false and getblock <hash> 0 mean the same to bitcoind.

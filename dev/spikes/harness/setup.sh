@@ -12,6 +12,7 @@
 #   CHAIN=blake2b ./setup.sh up     the BLAKE2b lab build, activation at ACT (default 300)
 #   ./setup.sh fulcrum              (re)start Fulcrum against the proxy, fresh datadir
 #   FULCRUM_NODE=nodeA FULCRUM_BITCOIND_PORT=19101 ./setup.sh fulcrum   ... against the archival node directly (no txindex)
+#   ./setup.sh electrs              (re)start Electrs Pruned beside it on :19130, for parity.py
 #   ./setup.sh down | clean
 #
 # Mines 800 blocks with wallet transactions spread through them, prunes B below 500 (B keeps
@@ -33,7 +34,7 @@ else
 fi
 PROXY="${PROXY:-/mnt/Black/pruned-electrs/vendor/btc-rpc-proxy/target/release/btc_rpc_proxy}"
 A_DIR="$ROOT/nodeA"; A_RPC=19101; A_P2P=19100
-B_DIR="$ROOT/nodeB"; B_RPC=19111; B_P2P=19110
+B_DIR="$ROOT/nodeB"; B_RPC=19111; B_P2P=19110; B_WHITE=19112  # B_WHITE: noban,download, for Electrs's p2p (parity)
 PROXY_PORT=19113; FULCRUM_TCP=19120
 
 acli() { "$BIN/bitcoin-cli" -datadir="$A_DIR" "$@"; }
@@ -44,8 +45,8 @@ write_confs() {
   printf 'regtest=1\nserver=1\nlisten=1\nfallbackfee=0.0001\n[regtest]\nrpcport=%s\nport=%s\nbind=127.0.0.1:%s\nrpcbind=127.0.0.1\nrpcallowip=127.0.0.1\n' \
     $A_RPC $A_P2P $A_P2P > "$A_DIR/bitcoin.conf"
   # prune=1: manual pruning, so nothing goes until pruneblockchain is called.
-  printf 'regtest=1\nserver=1\nprune=1\nlisten=1\nfallbackfee=0.0001\n[regtest]\nrpcport=%s\nport=%s\nbind=127.0.0.1:%s\nrpcbind=127.0.0.1\nrpcallowip=127.0.0.1\nconnect=127.0.0.1:%s\n' \
-    $B_RPC $B_P2P $B_P2P $A_P2P > "$B_DIR/bitcoin.conf"
+  printf 'regtest=1\nserver=1\nprune=1\nlisten=1\nfallbackfee=0.0001\n[regtest]\nrpcport=%s\nport=%s\nbind=127.0.0.1:%s\nrpcbind=127.0.0.1\nrpcallowip=127.0.0.1\nconnect=127.0.0.1:%s\nwhitebind=noban,download@127.0.0.1:%s\n' \
+    $B_RPC $B_P2P $B_P2P $A_P2P $B_WHITE > "$B_DIR/bitcoin.conf"
 }
 
 start_nodes() {
@@ -119,8 +120,25 @@ EOF
 }
 stop_fulcrum() { docker rm -f fulcrum-harness >/dev/null 2>&1 || true; }
 
+# Electrs Pruned beside Fulcrum, on the same node B and proxy, for parity.py (image: electrs/Dockerfile).
+# RPC through the proxy as Fulcrum's, P2P to B's whitebind (a pruned node disconnects a peer asking for a
+# block over 288 deep unless it has `download`, as on StartOS); Electrum on 127.0.0.1:$ELECTRS_TCP.
+ELECTRS_TCP=19130
+start_electrs() {
+  stop_electrs
+  rm -rf "$ROOT/electrs-db"; mkdir -p "$ROOT/electrs-db"
+  printf '%s\n' 'network = "regtest"' "daemon_rpc_addr = \"127.0.0.1:$PROXY_PORT\"" \
+    "daemon_p2p_addr = \"127.0.0.1:$B_WHITE\"" 'cookie_file = "/h/nodeB/regtest/.cookie"' \
+    'db_dir = "/h/electrs-db"' "electrum_rpc_addr = \"127.0.0.1:$ELECTRS_TCP\"" \
+    "monitoring_addr = \"127.0.0.1:$((ELECTRS_TCP + 1))\"" 'log_filters = "INFO"' > "$ROOT/electrs.toml"
+  docker run -d --name electrs-harness --network host -u "$(id -u):$(id -g)" -v "$ROOT:/h" \
+    "${ELECTRS_IMAGE:-fulcrum-parity-electrs}" --conf /h/electrs.toml >/dev/null
+  echo "Electrs Pruned starting on :$ELECTRS_TCP; logs: docker logs -f electrs-harness"
+}
+stop_electrs() { docker rm -f electrs-harness >/dev/null 2>&1 || true; }
+
 stop_all() {
-  stop_fulcrum
+  stop_fulcrum; stop_electrs
   [ -f "$ROOT/proxy.pid" ] && kill "$(cat "$ROOT/proxy.pid")" 2>/dev/null || true
   rm -f "$ROOT/proxy.pid"
   bcli stop 2>/dev/null || true; acli stop 2>/dev/null || true
@@ -138,8 +156,9 @@ case "${1:-up}" in
     start_proxy; echo "proxy up on 127.0.0.1:$PROXY_PORT"
     ;;
   fulcrum) start_fulcrum ;;
+  electrs) start_electrs ;;
   down) stop_all ;;
-  clean) stop_all; rm -rf "$A_DIR" "$B_DIR" "$ROOT/fulcrum-db" "$ROOT"/*.log "$ROOT"/*.pid "$ROOT"/*.toml \
+  clean) stop_all; rm -rf "$A_DIR" "$B_DIR" "$ROOT/fulcrum-db" "$ROOT/electrs-db" "$ROOT"/*.log "$ROOT"/*.pid "$ROOT"/*.toml \
            "$ROOT/fulcrum.conf" "$ROOT/txs.json" "$ROOT/chain" "$ROOT/activation" ;;
-  *) echo "usage: $0 {up|fulcrum|down|clean}" >&2; exit 1 ;;
+  *) echo "usage: $0 {up|fulcrum|electrs|down|clean}" >&2; exit 1 ;;
 esac

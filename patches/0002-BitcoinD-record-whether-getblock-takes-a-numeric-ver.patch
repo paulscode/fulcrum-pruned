@@ -1,7 +1,7 @@
 From 8143d05a961f1e7b50c759bf23282727e5c314cb Mon Sep 17 00:00:00 2001
 From: Paul Lamb <paul@paulscode.com>
 Date: Sun, 8 Nov 2026 20:01:48 -0600
-Subject: [PATCH 2/6] BitcoinD: record whether getblock takes a numeric
+Subject: [PATCH 2/7] BitcoinD: record whether getblock takes a numeric
  verbosity and getrawtransaction a block hash
 
 Two quirk flags in RpcSupportInfo, set like the others from the node's

@@ -1,7 +1,7 @@
 From 2b6118970c84b9595b0ce7d447e797885a7167c8 Mon Sep 17 00:00:00 2001
 From: Paul Lamb <paul@paulscode.com>
 Date: Sun, 8 Nov 2026 14:36:21 -0600
-Subject: [PATCH 5/6] Controller: check at startup that bitcoind serves
+Subject: [PATCH 5/7] Controller: check at startup that bitcoind serves
  transactions by block hash
 
 The startup check asks for tx #1 with getrawtransaction and no block

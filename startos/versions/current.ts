@@ -1,20 +1,20 @@
-import { IMPOSSIBLE, VersionInfo } from '@start9labs/start-sdk'
+import { VersionInfo } from '@start9labs/start-sdk'
 
-// The first release: a new package id, so there is no install base to migrate.
+// Nothing on disk changes in either direction: the patches change only what Fulcrum asks the node and
+// answers wallets, and the index format is the same.
 export const current = VersionInfo.of({
-  version: '2.1.4:0',
+  version: '2.1.4:1',
   releaseNotes: {
-    en_US: `First release of Fulcrum Pruned: Fulcrum 2.1.4 for a pruned Bitcoin node, on the SHA256 or the BLAKE2b chain.
+    en_US: `Fulcrum Pruned now also speaks Electrum protocol 1.8, the version Electrs Pruned uses on the BLAKE2b chain, so wallets and services that work with Electrs Pruned work here too. Everything that connected before still connects.
 
-- Works against a pruned node. Blocks the node has discarded are fetched from the network by the node's btc-rpc-proxy, both while Fulcrum builds its index and when a wallet looks up an old transaction. No txindex, and no prune setting is changed.
-- Select Node chooses which node to index: Bitcoin Knots, Bitcoin Knots (SHA256) Companion, or Bitcoin Knots (BLAKE2b) Companion. Each node keeps its own index, so switching back is immediate. Delete Unused Indexes frees the space of the others.
-- Built on privkeyio's BLAKE2b-aware Fulcrum, with five small patches for pruned nodes. server.features reports which side of the BLAKE2b fork the server follows.
-- Installs alongside Electrs Pruned, with different preferred ports.
+- Protocol 1.8 is offered on both chains, beside 1.4 to 1.6. A wallet that asks for 1.8 gets block headers in the same form Electrs Pruned sends.
+- A wallet that sends more lookups than the server can take at once no longer leaves part of its request allowance used up until it reconnects.
+- The patches over Fulcrum are now the set prepared for Fulcrum's own developers, plus the BLAKE2b ones. Nothing changes for Bitcoin Knots nodes.
 
-A first index against an already-pruned node takes several days, longer over Tor, and needs about 190 GB of disk.`,
+The index is kept: no rebuild.`,
   },
   migrations: {
     up: async () => {},
-    down: IMPOSSIBLE,
+    down: async () => {},
   },
 })
