@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Fulcrum Pruned beside Electrs Pruned, on the same regtest node: whatever works with Electrs Pruned
-must work with Fulcrum Pruned (internal_docs/PROTOCOL-1.8-PLAN.md section 3.3).
+must work with Fulcrum Pruned (patch 0007; patches/README.md).
 
   ./setup.sh up && ./setup.sh fulcrum && ./setup.sh electrs
   python3 -I parity.py [--wait]       Fulcrum on :19120 (PORT), Electrs on :19130 (ELECTRS_PORT)
@@ -14,8 +14,8 @@ Checks, on whichever chain the harness is on:
 - Replies: both connected with ['1.4', '1.8'], the same requests to each. Values must match where both
   read the same chain (headers, histories, balances, transactions, proofs); for the rest the shape (the
   keys and the types) must match.
-- Allowed differences, not compared: the server name in server.version, methods only Fulcrum has
-  (get_mempool), a 1.4.x answer to a range Electrs answers with 1.4, server.features beyond the
+- Allowed differences, not compared: the server name in server.version, methods and parameters only
+  Fulcrum has (get_mempool, cp_height), a 1.4.x answer to a range Electrs answers with 1.4, server.features beyond the
   keys both have, error text, and fee estimates' values (each asks the node at a different moment).
 """
 import hashlib, json, os, socket, subprocess, sys, time
@@ -103,7 +103,10 @@ print('     refused by Electrs (not judged): ' + '; '.join(refused_by_electrs))
 
 # ---- replies ----
 e, f = Client(ELECTRS, ['1.4', '1.8']), Client(FULCRUM, ['1.4', '1.8'])
-print(f"== replies: Electrs at {e.version['result'][1]}, Fulcrum at {f.version['result'][1]}")
+ev, fv = (c.version.get('result', [None, None])[1] for c in (e, f))
+print(f"== replies: Electrs at {ev}, Fulcrum at {fv}")
+check(fv == '1.8' and ev == ('1.8' if chain == 'blake2b' else '1.4'),
+      f"replies compared with Fulcrum at 1.8 and Electrs at {'1.8' if chain == 'blake2b' else '1.4'} (got {fv}, {ev})")
 
 
 def shape(x):
@@ -127,16 +130,27 @@ def shapes_agree(a, b):
 EXTRA = []  # methods only Fulcrum has
 
 
-def same(label, method, *params, value=True, normalize=None):
+def same(label, method, *params, value=True, normalize=None, expect_error=False, fulcrum_extra=False):
     a, b = e.call(method, *params), f.call(method, *params)
+    if 'disconnected' in (a.get('error'), b.get('error')):
+        check(False, f'{label}: a server dropped the connection (Electrs {a.get("error")}, Fulcrum {b.get("error")})')
+        return
     if (a.get('error') or {}).get('code') == -32601 and 'result' in b:
         print(f'     {label}: only Fulcrum has {method} (allowed: extra method)')
         if method not in EXTRA: EXTRA.append(method)
         return
-    if 'error' in a or 'error' in b:
-        # Both refusing is agreement; error text may differ.
-        ok = 'error' in a and 'error' in b
-        check(ok, f'{label}: both {"refuse" if ok else "must answer alike"} (Electrs {a.get("error")}, Fulcrum {b.get("error")})')
+    if fulcrum_extra:
+        # A parameter only Fulcrum takes (cp_height): Electrs must refuse it, Fulcrum must answer.
+        ok = 'error' in a and 'result' in b
+        check(ok, f'{label}: Electrs refuses, Fulcrum answers (allowed: an extra) '
+                  f'(Electrs {a.get("error")}, Fulcrum {b.get("error") or "answered"})')
+        if ok and label not in EXTRA: EXTRA.append(label)
+        return
+    if expect_error or 'error' in a or 'error' in b:
+        # Both refusing is agreement only where a refusal is the answer; error text may differ.
+        ok = expect_error and 'error' in a and 'error' in b
+        check(ok, f'{label}: ' + ('both refuse' if ok else 'expected ' + ('both to refuse' if expect_error else 'answers'))
+              + f' (Electrs {a.get("error")}, Fulcrum {b.get("error")})')
         return
     ra, rb = a['result'], b['result']
     if normalize: ra, rb = normalize(ra), normalize(rb)
@@ -157,6 +171,9 @@ lo = act - 3 if act else 400
 # 'max' is each server's own page size; the headers themselves must match.
 same(f'blockchain.block.headers {lo}+8', 'blockchain.block.headers', lo, 8, normalize=lambda r: {k: v for k, v in r.items() if k != 'max'})
 same(f'blockchain.block.headers {lo}+8 (shape, max included)', 'blockchain.block.headers', lo, 8, value=False)
+# cp_height (checkpoint proofs) is Fulcrum's alone; check.py proves its answers against the node.
+same(f'blockchain.block.headers {lo}+8 cp_height {tip}', 'blockchain.block.headers', lo, 8, tip, fulcrum_extra=True)
+same(f'blockchain.block.header {mid} cp_height {tip}', 'blockchain.block.header', mid, tip, fulcrum_extra=True)
 same(f'blockchain.block.headers {tip - 1}+5 (past the tip)', 'blockchain.block.headers', tip - 1, 5,
      normalize=lambda r: {k: v for k, v in r.items() if k != 'max'})
 
@@ -180,9 +197,12 @@ addr = acli('-rpcwallet=w', 'getnewaddress')
 mtx = acli('-rpcwallet=w', '-named', 'sendtoaddress', 'address=' + addr, 'amount=0.02')
 spk = json.loads(acli('-rpcwallet=w', 'getaddressinfo', addr))['scriptPubKey']
 msh = hashlib.sha256(bytes.fromhex(spk)).digest()[::-1].hex()
+def has_mtx(c):
+    return any(h.get('tx_hash') == mtx for h in c.call('blockchain.scripthash.get_history', msh).get('result') or [])
 for _ in range(60):
-    if all(c.call('blockchain.scripthash.get_history', msh).get('result') for c in (e, f)): break
+    if has_mtx(e) and has_mtx(f): break
     time.sleep(1)
+check(has_mtx(e) and has_mtx(f), f'the mempool transaction {mtx[:16]}... reached both servers')
 # The unconfirmed entry (height 0, with its fee) through get_history, which both implement.
 same('mempool scripthash get_history', 'blockchain.scripthash.get_history', msh, normalize=hist_sort)
 same('mempool scripthash get_balance', 'blockchain.scripthash.get_balance', msh)
@@ -199,7 +219,7 @@ for t in (txs[0], txs[len(txs) // 2], txs[-1]):  # pruned, middle, recent
     pos = blk['tx'].index(t['txid'])
     same(f'transaction.id_from_pos @{t["height"]}:{pos}', 'blockchain.transaction.id_from_pos', t['height'], pos)
     same(f'transaction.id_from_pos @{t["height"]}:{pos} merkle', 'blockchain.transaction.id_from_pos', t['height'], pos, True)
-same('transaction.get unknown txid', 'blockchain.transaction.get', '11' * 32)
+same('transaction.get unknown txid', 'blockchain.transaction.get', '11' * 32, expect_error=True)
 
 same('blockchain.estimatefee 2', 'blockchain.estimatefee', 2, value=False)
 same('blockchain.relayfee', 'blockchain.relayfee', value=False)
@@ -217,6 +237,6 @@ check(shapes_agree(shape({k: fa[k] for k in common}), shape({k: fb[k] for k in c
       f'server.features: same shape for the {len(common)} shared keys')
 print(f"     protocol: Electrs {fa.get('protocol_min')}..{fa.get('protocol_max')}, Fulcrum {fb.get('protocol_min')}..{fb.get('protocol_max')}")
 
-print('     methods only Fulcrum has (allowed): ' + (', '.join(EXTRA) or 'none'))
+print('     only Fulcrum has (allowed): ' + (', '.join(EXTRA) or 'none'))
 print('\nFAILED: ' + '; '.join(x.splitlines()[0] for x in fails) if fails else '\nall parity checks passed')
 sys.exit(1 if fails else 0)

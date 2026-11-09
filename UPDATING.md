@@ -19,7 +19,8 @@ git -C dev/spikes/fulcrum-src am "$PWD"/patches/*.patch
 
 `dev/spikes/build.sh [test]` builds it in the dev image (build that first:
 `docker build -t fulcrum-pruned-dev dev/spikes/devimage`), and `dev/spikes/harness/` is the
-regtest harness (`setup.sh` and `check.py`; see the comments at their tops).
+regtest harness (`setup.sh`, `check.py`, and `parity.py`, which compares against Electrs Pruned;
+see the comments at their tops).
 
 ## A new Fulcrum version
 
@@ -38,9 +39,10 @@ never a branch.
    git -C dev/spikes/fulcrum-src rebase --onto <new tag> <old tag> pruned
    ```
 
-   Build with tests (`dev/spikes/build.sh test`), run `Fulcrum --test all` from the source
-   directory, and check that every patch builds and passes on its own. Run the harness on both
-   chains, through the proxy and against the archival node:
+   Check that every patch builds and passes Fulcrum's unit tests on its own:
+   `dev/spikes/prefix-test.sh` builds each prefix of the series from clean and runs
+   `Fulcrum --test all` on it. Then build the dev binary with tests (`dev/spikes/build.sh test`)
+   and run the harness on both chains, through the proxy and against the archival node:
 
    ```sh
    cd dev/spikes/harness
@@ -48,6 +50,13 @@ never a branch.
    FULCRUM_NODE=nodeA FULCRUM_BITCOIND_PORT=19101 ./setup.sh fulcrum && python3 -I check.py --wait
    ./setup.sh clean; CHAIN=blake2b ./setup.sh up   # and the same two runs
    ```
+
+   And Electrs Pruned beside it, on each chain, through the proxy (build its image once, from
+   `dev/spikes/harness`, as the top of `electrs/Dockerfile` shows):
+
+   ```sh
+   ./setup.sh fulcrum && ./setup.sh electrs && python3 -I parity.py --wait
+```
 
    Then regenerate the patches, and update the tag named in `patches/README.md`:
 
@@ -68,15 +77,11 @@ never a branch.
 
 ## A package-only release (`2.1.4:1`, and so on)
 
-Move the released version out of `current.ts` into its own file, so the version graph keeps it:
-
-1. Copy `startos/versions/current.ts` to `startos/versions/v2.1.4_0.ts`, rename its export to
-   `v_2_1_4_0`, and keep its migrations with it (a migration stays with the version that
-   needed it).
-2. In `current.ts`, set `version` to the new one, write the release notes, and give it its own
-   migrations (an empty `up` if nothing changes on disk).
-3. In `startos/versions/index.ts`, add the old one to `other`:
-   `VersionGraph.of({ current, other: [v_2_1_4_0] })`.
+Edit `startos/versions/current.ts` in place: the new `version`, its release notes, and its
+migrations (empty `up` and `down` when nothing changes on disk). `index.ts` stays as it is. A
+released version gets a file of its own and a place in `other` only when it has a migration of
+its own that must still run on the way up (the SDK's `versions.md`, "When to Create a New Version
+File"); git history keeps the old release notes.
 
 ## Fixes from privkeyio's package
 

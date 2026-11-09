@@ -1,4 +1,4 @@
-From f7b1b033697cb45727fca4ce095d5d5032f825d7 Mon Sep 17 00:00:00 2001
+From b9336ca651e10e4d4701459c32452e9324e2ad50 Mon Sep 17 00:00:00 2001
 From: Paul Lamb <paul@paulscode.com>
 Date: Sun, 8 Nov 2026 22:01:31 -0600
 Subject: [PATCH 7/7] Servers: negotiate Electrum protocol 1.8
@@ -36,11 +36,11 @@ off). Fulcrum --version shows both.
 ---
  Fulcrum.pro                  |  1 +
  src/App.cpp                  |  3 +-
- src/ServerMisc.cpp           | 20 ++++++++++
- src/ServerMisc.h             | 25 ++++++++++++
- src/Servers.cpp              | 20 ++++++----
- src/tests/Protocol_tests.cpp | 77 ++++++++++++++++++++++++++++++++++++
- 6 files changed, 137 insertions(+), 9 deletions(-)
+ src/ServerMisc.cpp           | 20 +++++++++
+ src/ServerMisc.h             | 25 +++++++++++
+ src/Servers.cpp              | 20 +++++----
+ src/tests/Protocol_tests.cpp | 85 ++++++++++++++++++++++++++++++++++++
+ 6 files changed, 145 insertions(+), 9 deletions(-)
  create mode 100644 src/tests/Protocol_tests.cpp
 
 diff --git a/Fulcrum.pro b/Fulcrum.pro
@@ -211,10 +211,10 @@ index 0dad759..ffabeb4 100644
              size_t totalHexSz = 0;
 diff --git a/src/tests/Protocol_tests.cpp b/src/tests/Protocol_tests.cpp
 new file mode 100644
-index 0000000..8638192
+index 0000000..1d0bf60
 --- /dev/null
 +++ b/src/tests/Protocol_tests.cpp
-@@ -0,0 +1,77 @@
+@@ -0,0 +1,85 @@
 +//
 +// Fulcrum - A fast & nimble SPV Server for Bitcoin Cash
 +// Copyright (C) 2019-2026 Calin A. Culianu <calin.culianu@gmail.com>
@@ -263,7 +263,10 @@ index 0000000..8638192
 +    TEST_CHECK_EQUAL(negotiate(nullptr, "1.6"), QString("1.6"));
 +    TEST_CHECK_EQUAL(negotiate(nullptr, "1.7"), QString("refused"));
 +    TEST_CHECK_EQUAL(negotiate(nullptr, "1.8"), QString("1.8"));
-+    TEST_CHECK_EQUAL(negotiate(nullptr, "1.8.1"), QString("refused"));
++    TEST_CHECK_EQUAL(negotiate(nullptr, "1.8.0"), QString("1.8"));     // answered as "1.8"
++    TEST_CHECK_EQUAL(negotiate(nullptr, "1.8.1"), QString("refused")); // exactly 1.8
++    TEST_CHECK_EQUAL(negotiate(nullptr, "1.5.9"), QString("1.5.9"));
++    TEST_CHECK_EQUAL(negotiate(nullptr, "1.6.1"), QString("refused")); // above 1.6.0, as before
 +    TEST_CHECK_EQUAL(negotiate(nullptr, "1.9"), QString("refused"));
 +    TEST_CHECK_EQUAL(negotiate(nullptr, "garbage"), QString("refused"));
 +};
@@ -280,6 +283,11 @@ index 0000000..8638192
 +    TEST_CHECK_EQUAL(negotiate("1.9", "2.0"), QString("refused"));
 +    TEST_CHECK_EQUAL(negotiate("1.0", "1.3"), QString("refused"));
 +    TEST_CHECK_EQUAL(negotiate("1.8", "1.4"), QString("refused")); // reversed
++    TEST_CHECK_EQUAL(negotiate("1.4", "1.8.1"), QString("1.8"));   // a range reaching 1.8 gets 1.8
++    TEST_CHECK_EQUAL(negotiate("1.4", "1.6.1"), QString("1.6"));
++    TEST_CHECK_EQUAL(negotiate("1.8", "1.8"), QString("1.8"));
++    TEST_CHECK_EQUAL(negotiate("1.8.1", "2.0"), QString("refused"));
++    TEST_CHECK_EQUAL(negotiate("1.6.1", "1.7"), QString("refused"));
 +};
 +
 +TEST_CASE(headers_reply_form) {

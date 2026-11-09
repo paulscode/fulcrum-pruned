@@ -10,8 +10,9 @@
 > `instructions.md` for links.
 
 Fulcrum Pruned is [Fulcrum](https://github.com/cculianu/Fulcrum), a fast Electrum server, through
-[privkeyio's BLAKE2b-aware fork](https://github.com/privkeyio/Fulcrum), with seven patches that let
-it index and serve a **pruned** Bitcoin node through the node's btc-rpc-proxy. It follows either
+[privkeyio's BLAKE2b-aware fork](https://github.com/privkeyio/Fulcrum), with seven patches: five let it
+index and serve a **pruned** Bitcoin node through the node's btc-rpc-proxy, one reports the BLAKE2b
+fork point, and one adds Electrum protocol 1.8. It follows either
 chain, SHA256 or BLAKE2b, through Select Node, and installs alongside Electrs Pruned (a different
 package id), so a server with two pruned nodes can run an Electrum server for each.
 
@@ -49,7 +50,7 @@ x86_64 and aarch64 and never offered under emulation. The binary reports its com
 | 0004 | `blockchain.transaction.get` names the block, found in Fulcrum's own index, so no `txindex` is needed; counted against the client's throttle as it is read; given `bitcoind_timeout`; the reply must be the transaction asked for; a txid not in the index gets "not in the index of this server" instead of the node's txindex advice. |
 | 0005 | The startup check asks for transaction #1 by its block and, on failure, names the proxy; it stops after three failures. |
 | 0006 | `server.features.blake2b_fork = {height, hash, header_bytes: 164, block_hash: "blake2b"}` on a chain with extended headers, absent otherwise (the shape Electrs Pruned uses). |
-| 0007 | Electrum protocol 1.8 is offered beside 1.4 to 1.6, on both chains (no 1.7); `protocol_max` is 1.8; at 1.8 `blockchain.block.headers` answers with the concatenated hex string, as Electrs Pruned does. Peering keeps 1.6. |
+| 0007 | Electrum protocol 1.8 is offered beside 1.4 to 1.6, on both chains (no 1.7); `protocol_max` is 1.8; at 1.8 `blockchain.block.headers` answers with the concatenated hex string, as Electrs Pruned does. A range reaching 1.8 (such as `[1.4, 2.0]`) now gets 1.8, where it got 1.6. Peering keeps 1.6. |
 
 One subcontainer, `primary-sub`, runs the daemon `primary`: a short shell loop that waits up to five
 minutes for the node's RPC cookie, then `Fulcrum --ts-format none /data/fulcrum.conf`.

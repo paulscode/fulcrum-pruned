@@ -62,9 +62,10 @@ if '--wait' in sys.argv:
             pass
         time.sleep(1)
 
-def patches_0001_to_0006(PVER):
+def patches_0001_to_0006(PVER, want):
     c = Client(PVER)
     print(f'== 0001-0006 connected at {PVER}:', c.version)
+    check(c.version.get('result', [None, None])[1] == want, f'0007: {PVER} negotiates {want}, and the checks below run at it')
     tip = int(acli('getblockcount'))
     sub = c.call('blockchain.headers.subscribe')['result']
     check(sub['height'] == tip, f"0001-0003: indexed to the node's tip {tip} (got {sub['height']})")
@@ -148,8 +149,8 @@ def patches_0001_to_0006(PVER):
 
 
 
-patches_0001_to_0006('1.4')
-patches_0001_to_0006(['1.4', '1.8'])
+patches_0001_to_0006('1.4', '1.4')
+patches_0001_to_0006(['1.4', '1.8'], '1.8')
 
 # ---- 0007: protocol 1.8 ----
 print('== 0007')
@@ -162,16 +163,25 @@ MATRIX = [  # (what the client sends, the version it should get, or None for ref
 ]
 bad = []
 for sent, want in MATRIX:
-    r = Client(sent).version
+    cl = Client(sent)
+    r = cl.version
     got = r['result'][1] if 'result' in r else None
     if got != want:
         bad.append(f'{sent}: got {got} want {want}')
+    elif want is None:
+        msg = json.dumps(r.get('error'))
+        if not ('Unsupported protocol version' in msg or 'Bad version tuple' in msg):
+            bad.append(f'{sent}: refused with {msg}')
+        elif 'disconnected' not in json.dumps(cl.call('server.ping')):
+            bad.append(f'{sent}: refused but the connection stayed open')
 check(not bad, f'0007: version matrix, {len(MATRIX)} cases ({"; ".join(bad) or "all as expected"})')
 
 feat = Client('1.8').call('server.features')['result']
 check(feat.get('protocol_min') == '1.4' and feat.get('protocol_max') == '1.8',
       f"0007: server.features protocol_min {feat.get('protocol_min')}, protocol_max {feat.get('protocol_max')}")
-check(('blake2b_fork' in feat) == (chain == 'blake2b'), '0007: blake2b_fork unchanged at 1.8')
+want_fork = ({'height': act, 'hash': acli('getblockhash', str(act)), 'header_bytes': 164, 'block_hash': 'blake2b'}
+             if chain == 'blake2b' else None)
+check(feat.get('blake2b_fork') == want_fork, f"0007: blake2b_fork at 1.8 is {feat.get('blake2b_fork')}")
 
 def walk(hexstr):
     """Split concatenated header hex by each header's version bit 31 (80 or 164 bytes)."""
@@ -204,6 +214,15 @@ while len(level) > 1:
     level = [sha256d(level[k] + level[k + 1]) for k in range(0, len(level), 2)]
 want_root = level[0][::-1].hex()
 h = act + 2 if chain == 'blake2b' else 400
+r = Client('1.8').call('blockchain.block.headers', start, COUNT, cp).get('result') or {}
+last, idx = leaves[start + COUNT - 1], start + COUNT - 1
+for sib in r.get('branch', []):
+    sib = bytes.fromhex(sib)[::-1]
+    last = sha256d(sib + last) if idx & 1 else sha256d(last + sib)
+    idx >>= 1
+check(isinstance(r.get('hex'), str) and walk(r['hex']) == node_hdrs and r.get('root') == want_root
+      and last[::-1].hex() == want_root,
+      f'0007: blockchain.block.headers {start}+{COUNT} cp_height {cp} at 1.8: hex form, root and branch from the block ids')
 for pver in ('1.4', '1.8'):
     r = Client(pver).call('blockchain.block.header', h, cp).get('result') or {}
     # fold the block's own id up the branch to the root

@@ -9,7 +9,6 @@ export const current = VersionInfo.of({
 
 - Protocol 1.8 is offered on both chains, beside 1.4 to 1.6. A wallet that asks for 1.8 gets block headers in the same form Electrs Pruned sends.
 - A wallet that sends more lookups than the server can take at once no longer leaves part of its request allowance used up until it reconnects.
-- The patches over Fulcrum are now the set prepared for Fulcrum's own developers, plus the BLAKE2b ones. Nothing changes for Bitcoin Knots nodes.
 
 The index is kept: no rebuild.`,
   },
