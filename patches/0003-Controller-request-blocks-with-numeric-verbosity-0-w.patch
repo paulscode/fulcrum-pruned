@@ -1,0 +1,61 @@
+From 2959301d433b2c2b5787ff360edba1f08681aacb Mon Sep 17 00:00:00 2001
+From: Paul Lamb <paul@paulscode.com>
+Date: Sun, 8 Nov 2026 20:01:48 -0600
+Subject: [PATCH 3/6] Controller: request blocks with numeric verbosity 0 where
+ the node takes it
+
+getblock <hash> false and getblock <hash> 0 mean the same to bitcoind.
+A proxy that serves a pruned node's discarded blocks by fetching them
+from peers need not treat them the same: btc-rpc-proxy (Start9's, used
+by StartOS for every pruned node) intercepts only the numeric form, so
+with false every block below the prune height reached the node, which
+answered that it was pruned, and the initial sync could not proceed.
+
+Send 0 to Core, Knots and Litecoin, which all take it; send false, as
+before, to everything else.
+---
+ src/Controller.cpp | 9 ++++++++-
+ src/Controller.h   | 3 +++
+ 2 files changed, 11 insertions(+), 1 deletion(-)
+
+diff --git a/src/Controller.cpp b/src/Controller.cpp
+index 3f14d39..c510d52 100644
+--- a/src/Controller.cpp
++++ b/src/Controller.cpp
+@@ -573,7 +573,12 @@ void DownloadBlocksTask::do_get(unsigned int bnum)
+         QVariant var = resp.result();
+         const auto hash = Util::ParseHexFast(var.toByteArray());
+         if (hash.length() == HashLen) {
+-            submitRequest("getblock", {var, false}, [this, bnum, hash](const RPC::Message & resp){
++            // Verbosity as the number 0 where the node takes it, rather than the boolean false. The two mean the same
++            // to bitcoind, but a proxy serving a pruned node's discarded blocks by fetching them from peers (such as
++            // btc-rpc-proxy, up to at least v0.8.2) may intercept only the numeric form and pass `false` through to
++            // the node, which then fails it for any block below its prune height.
++            const QVariant verbosity = rpcSupportInfo().getBlockTakesNumericVerbosity ? QVariant(0) : QVariant(false);
++            submitRequest("getblock", {var, verbosity}, [this, bnum, hash](const RPC::Message & resp){
+                 try {
+                     auto rawblock = Util::ParseHexFast(resp.result().toByteArray());
+                     // header size depends on whether this is a legacy or an extended (BLAKE2b) header
+@@ -1629,6 +1634,8 @@ CtlTask::~CtlTask() {
+     stop();
+ }
+ 
++BitcoinDInfo::RpcSupportInfo CtlTask::rpcSupportInfo() const { return ctl->bitcoindmgr->getRpcSupportInfo(); }
++
+ void CtlTask::on_started()
+ {
+     ThreadObjectMixin::on_started();
+diff --git a/src/Controller.h b/src/Controller.h
+index 2cfab96..649dfa7 100644
+--- a/src/Controller.h
++++ b/src/Controller.h
+@@ -346,6 +346,9 @@ signals:
+ 
+     void progress(double); ///< some tasks emit this to indicate progress. may be a number from 0->1.0 or anything else (task specific)
+ protected:
++    /// The remote bitcoind's quirks, for subclasses (which, unlike this class, are not friends of the Controller).
++    BitcoinDInfo::RpcSupportInfo rpcSupportInfo() const;
++
+     void on_started() override;
+     void on_finished() override;
+ 

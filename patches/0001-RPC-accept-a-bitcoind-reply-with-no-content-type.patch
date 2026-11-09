@@ -1,21 +1,21 @@
-From 569161cc4828a0f2c56ba460f87ffa6c017bc08c Mon Sep 17 00:00:00 2001
+From 1a01f2d6e96501f2af407fd23d2c4b9955464a47 Mon Sep 17 00:00:00 2001
 From: Paul Lamb <paul@paulscode.com>
 Date: Sun, 8 Nov 2026 14:43:13 -0600
-Subject: [PATCH 1/5] RPC: accept a bitcoind reply with no content-type
+Subject: [PATCH 1/6] RPC: accept a bitcoind reply with no content-type
 
 HttpConnection required both content-type and content-length and
-dropped the connection when either was missing. btc-rpc-proxy, which a
-pruned node puts in front of its RPC port, sends content-type on the
-replies it passes through from bitcoind but not on the ones it builds
-itself, and those are exactly the blocks and transactions it fetches from
-peers because the node has pruned them. So every pruned block fetch tore
-down the RPC connection, and Fulcrum never got past the prune height.
+dropped the connection when either was missing. btc-rpc-proxy, which
+StartOS puts in front of a pruned node's RPC port, sends content-type on
+the replies it passes through from bitcoind but not on the ones it
+builds itself, and those are exactly the blocks and transactions it
+fetches from peers because the node has pruned them. So every pruned
+block fetch tore down the RPC connection, and Fulcrum never got past the
+prune height.
 
-Seen in every proxy tag through v0.8.2-blake2b.2. Content-length is still
-required, since it frames the body. A missing content-type is taken as
-JSON; the body is parsed as JSON regardless, so anything else still fails
-there. A content-type other than application/json is still logged as
-before.
+Content-length is still required, since it frames the body. A missing
+content-type is taken as JSON; the body is parsed as JSON regardless, so
+anything else still fails there. A content-type other than
+application/json is still logged as before.
 ---
  src/RPC.cpp | 10 ++++++++--
  1 file changed, 8 insertions(+), 2 deletions(-)

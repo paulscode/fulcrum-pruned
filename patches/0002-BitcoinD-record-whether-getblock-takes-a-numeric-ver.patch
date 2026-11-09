@@ -1,0 +1,61 @@
+From 8143d05a961f1e7b50c759bf23282727e5c314cb Mon Sep 17 00:00:00 2001
+From: Paul Lamb <paul@paulscode.com>
+Date: Sun, 8 Nov 2026 20:01:48 -0600
+Subject: [PATCH 2/6] BitcoinD: record whether getblock takes a numeric
+ verbosity and getrawtransaction a block hash
+
+Two quirk flags in RpcSupportInfo, set like the others from the node's
+subversion and version, and reported in /stats:
+
+- getBlockTakesNumericVerbosity: Bitcoin Core (and Knots) and Litecoin
+  0.15.0 and later.
+- getRawTransactionTakesBlockHash: Bitcoin Core (and Knots) and Litecoin
+  0.16.0 and later.
+
+The next commits use them to ask for blocks and transactions in forms a
+pruned node can be served through a proxy that fetches its discarded
+blocks from peers. Other implementations (bchd takes neither form) keep
+today's requests unchanged.
+---
+ src/BitcoinD.cpp | 7 +++++++
+ src/BitcoinD.h   | 2 ++
+ 2 files changed, 9 insertions(+)
+
+diff --git a/src/BitcoinD.cpp b/src/BitcoinD.cpp
+index 488a432..9e9b518 100644
+--- a/src/BitcoinD.cpp
++++ b/src/BitcoinD.cpp
+@@ -316,6 +316,11 @@ void BitcoinDMgr::refreshBitcoinDNetworkInfo()
+                 // almost worthless on 27.0.0 (according to ElectrumX devs), and so we require 28.0.0.
+                 // See: https://github.com/spesmilo/electrum-protocol/pull/6/files#r2459860616
+                 rsi.hasSubmitPackageRPC = res.isCore && bitcoinDInfo.version >= Version{0, 28, 0};
++                // Forms of `getblock` and `getrawtransaction` that a pruned node can be served through a proxy that
++                // fetches its discarded blocks from peers (e.g. btc-rpc-proxy). Limited to the implementations known to
++                // take them; everything else keeps the boolean verbosity and the txindex lookup.
++                rsi.getBlockTakesNumericVerbosity = (res.isCore || res.isLTC) && bitcoinDInfo.version >= Version{0, 15, 0};
++                rsi.getRawTransactionTakesBlockHash = (res.isCore || res.isLTC) && bitcoinDInfo.version >= Version{0, 16, 0};
+                 if (res.isCore && !rsi.hasSubmitPackageRPC) // warn admin about lack of submitpackage support
+                     Warning() << "*** Compatibility Warning *** The BTC full node backing this " APPNAME " instance"
+                                  " lacks a known-good `submitpackage` RPC, which is needed for full Electrum protocol"
+@@ -1079,6 +1084,8 @@ QVariantMap BitcoinDInfo::toVariantMap() const
+     ret["hasDSProofRPC"] = rpcSupportInfo.hasDSProofRPC;
+     ret["sendRawTransactionRequiresMaxBurnAmount"] = rpcSupportInfo.sendRawTransactionRequiresMaxBurnAmount;
+     ret["hasSubmitPackageRPC"] = rpcSupportInfo.hasSubmitPackageRPC;
++    ret["getBlockTakesNumericVerbosity"] = rpcSupportInfo.getBlockTakesNumericVerbosity;
++    ret["getRawTransactionTakesBlockHash"] = rpcSupportInfo.getRawTransactionTakesBlockHash;
+     ret["isCore"] = isCore;
+     ret["isLTC"] = isLTC;
+     ret["isBU"] = isBU;
+diff --git a/src/BitcoinD.h b/src/BitcoinD.h
+index 5a649c0..ea40761 100644
+--- a/src/BitcoinD.h
++++ b/src/BitcoinD.h
+@@ -57,6 +57,8 @@ struct BitcoinDInfo {
+         bool hasDSProofRPC = false; ///< true if the RPC query to `getdsprooflist` didn't return an error.
+         bool sendRawTransactionRequiresMaxBurnAmount = false; ///< true if the `sendrawtransaction` RPC requires 2 extra args. Bitcoin Core >= 25.0.0 only.
+         bool hasSubmitPackageRPC = false; ///< true if the `submitpackage` RPC method exists and is what we expect. Bitcoin Core >= 28.0.0 only.
++        bool getBlockTakesNumericVerbosity = false; ///< true if `getblock` takes a numeric verbosity (`getblock <hash> 0`). Bitcoin Core >= 0.15.0, Litecoin >= 0.15.0.
++        bool getRawTransactionTakesBlockHash = false; ///< true if `getrawtransaction` takes a block hash as its third argument, which lets it find a confirmed tx without -txindex. Bitcoin Core >= 0.16.0, Litecoin >= 0.16.0.
+     };
+     RpcSupportInfo rpcSupportInfo;
+     bool isCore = false; ///< true if we are actually connected to /Satoshi.. node (Bitcoin Core)

@@ -10,7 +10,7 @@
 > `instructions.md` for links.
 
 Fulcrum Pruned is [Fulcrum](https://github.com/cculianu/Fulcrum), a fast Electrum server, through
-[privkeyio's BLAKE2b-aware fork](https://github.com/privkeyio/Fulcrum), with five patches that let
+[privkeyio's BLAKE2b-aware fork](https://github.com/privkeyio/Fulcrum), with six patches that let
 it index and serve a **pruned** Bitcoin node through the node's btc-rpc-proxy. It follows either
 chain, SHA256 or BLAKE2b, through Select Node, and installs alongside Electrs Pruned (a different
 package id), so a server with two pruned nodes can run an Electrum server for each.
@@ -44,10 +44,11 @@ x86_64 and aarch64 and never offered under emulation. The binary reports its com
 | Patch | What it changes |
 |---|---|
 | 0001 | A bitcoind reply with no `content-type` is accepted: btc-rpc-proxy omits it on the pruned blocks and transactions it builds itself. |
-| 0002 | Blocks are requested with `getblock <hash> 0`; the proxy serves a pruned block only for a numeric verbosity. |
-| 0003 | `blockchain.transaction.get` names the block, found in Fulcrum's own index, so no `txindex` is needed; counted against the client's throttle as it is read; given `bitcoind_timeout`; the reply must be the transaction asked for; a txid not in the index gets "not in the index of this server" instead of the node's txindex advice. |
-| 0004 | The startup check asks for transaction #1 by its block and, on failure, names the proxy; it stops after three failures. |
-| 0005 | `server.features.blake2b_fork = {height, hash, header_bytes: 164, block_hash: "blake2b"}` on a chain with extended headers, absent otherwise (the shape Electrs Pruned uses). |
+| 0002 | Records whether the node takes a numeric `getblock` verbosity and a block hash in `getrawtransaction` (Core and Knots do); 0003-0005 use those forms only then, and any other node is asked as upstream asks. |
+| 0003 | Blocks are requested with `getblock <hash> 0`; the proxy serves a pruned block only for a numeric verbosity. |
+| 0004 | `blockchain.transaction.get` names the block, found in Fulcrum's own index, so no `txindex` is needed; counted against the client's throttle as it is read; given `bitcoind_timeout`; the reply must be the transaction asked for; a txid not in the index gets "not in the index of this server" instead of the node's txindex advice. |
+| 0005 | The startup check asks for transaction #1 by its block and, on failure, names the proxy; it stops after three failures. |
+| 0006 | `server.features.blake2b_fork = {height, hash, header_bytes: 164, block_hash: "blake2b"}` on a chain with extended headers, absent otherwise (the shape Electrs Pruned uses). |
 
 One subcontainer, `primary-sub`, runs the daemon `primary`: a short shell loop that waits up to five
 minutes for the node's RPC cookie, then `Fulcrum --ts-format none /data/fulcrum.conf`.

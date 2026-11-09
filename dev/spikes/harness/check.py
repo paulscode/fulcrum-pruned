@@ -4,15 +4,16 @@
   python3 -I check.py [--wait]     reads txs.json, chain, activation from this directory
 
 0001 (no content-type),
-0002 (getblock 0):        Fulcrum indexed every block, including those only the proxy can supply.
-0003 (transaction.get):   every transaction, pruned or not, raw and verbose, comes back; a txid
+0002 (quirk flags),
+0003 (getblock 0):        Fulcrum indexed every block, including those only the proxy can supply.
+0004 (transaction.get):   every transaction, pruned or not, raw and verbose, comes back; a txid
                           not in the index gets the rewritten message, not txindex advice.
                           A client pipelining 3,000 lookups gets every answer; with
                           FULCRUM_DEBUG=1 at `setup.sh fulcrum`, the log shows the client's reads
                           paused at 50 in flight (count 'PAUSING reads' in `docker logs fulcrum-harness`).
-0004 (startup check):     no txindex banner in Fulcrum's log (checked by the caller from the log;
+0005 (startup check):     no txindex banner in Fulcrum's log (checked by the caller from the log;
                           FULCRUM_BITCOIND_PORT=19111 skips the proxy to see the banner).
-0005 (blake2b_fork):      present with the right height and hash on BLAKE2b, absent on SHA256.
+0006 (blake2b_fork):      present with the right height and hash on BLAKE2b, absent on SHA256.
 """
 import json, os, socket, subprocess, sys, time
 
@@ -57,7 +58,7 @@ c = Client()
 print(c.call('server.version', 'check.py', '1.4'))
 tip = int(acli('getblockcount'))
 sub = c.call('blockchain.headers.subscribe')['result']
-check(sub['height'] == tip, f"0001+0002: indexed to the node's tip {tip} (got {sub['height']})")
+check(sub['height'] == tip, f"0001-0003: indexed to the node's tip {tip} (got {sub['height']})")
 
 pruned_below = 470
 n_pruned = sum(1 for t in txs if t['height'] < pruned_below)
@@ -71,8 +72,8 @@ for t in txs:
     r = v.get('result') or {}
     if 'error' in v or r.get('txid') != t['txid'] or r.get('confirmations', 0) < 1:
         bad_verbose += 1; print('  verbose', t, v.get('error'))
-check(bad_raw == 0, f"0003: raw transaction.get for all {len(txs)} (wrong: {bad_raw})")
-check(bad_verbose == 0, f"0003: verbose transaction.get for all {len(txs)} (wrong: {bad_verbose})")
+check(bad_raw == 0, f"0004: raw transaction.get for all {len(txs)} (wrong: {bad_raw})")
+check(bad_verbose == 0, f"0004: verbose transaction.get for all {len(txs)} (wrong: {bad_verbose})")
 
 # Verbose fields agree with the node's own answer (asked with the block hash, since the reference
 # node has no txindex either). in_active_chain is added by bitcoind and the proxy alike when a
@@ -84,14 +85,14 @@ for t in txs[::7]:
     for k in ('txid', 'hash', 'blockhash', 'blocktime', 'hex', 'vin', 'vout'):
         if got.get(k) != want.get(k):
             bad_fields += 1; print('  field', k, t['height'])
-check(bad_fields == 0, f'0003: verbose fields match the node for {len(txs[::7])} transactions')
+check(bad_fields == 0, f'0004: verbose fields match the node for {len(txs[::7])} transactions')
 
 # A coinbase in a pruned block, raw.
 cb_h = 50
 cb = json.loads(acli('getblock', acli('getblockhash', str(cb_h)), '1'))['tx'][0]
 got = c.call('blockchain.transaction.get', cb)
 check(got.get('result') == acli('getrawtransaction', cb, 'false', acli('getblockhash', str(cb_h))),
-      f'0003: coinbase at height {cb_h} (pruned block)')
+      f'0004: coinbase at height {cb_h} (pruned block)')
 
 # A mempool transaction: not in the index, so asked without a hash, which the node answers.
 mtx = acli('-rpcwallet=w', '-named', 'sendtoaddress', 'address=' + acli('-rpcwallet=w', 'getnewaddress'), 'amount=0.01')
@@ -109,7 +110,7 @@ check('result' in m and m['result']['block_height'] == t0['height'], 'get_merkle
 missing = c.call('blockchain.transaction.get', '11' * 32)
 msg = json.dumps(missing.get('error'))
 check('error' in missing and 'txindex' not in msg and 'not in the index of this server' in msg,
-      f"0003: unknown txid gets the rewritten error ({msg[:140]})")
+      f"0004: unknown txid gets the rewritten error ({msg[:140]})")
 
 # A client pipelining many lookups at once (each a block fetch from peers on a pruned node). Every one
 # must be answered, and correctly; the throttle pauses the client's reads at 50 in flight (see above).
@@ -123,16 +124,16 @@ for _ in range(N):
     r = json.loads(fc.f.readline()); answers[r['id']] = r
 want = {t['txid']: c.call('blockchain.transaction.get', t['txid'])['result'] for t in txs}
 wrong = sum(1 for i, r in answers.items() if r.get('result') != want[txs[i % len(txs)]['txid']])
-check(len(answers) == N and wrong == 0, f'0003: {N} pipelined lookups from one client all answered correctly (wrong: {wrong})')
+check(len(answers) == N and wrong == 0, f'0004: {N} pipelined lookups from one client all answered correctly (wrong: {wrong})')
 
 feat = c.call('server.features')['result']
 fork = feat.get('blake2b_fork')
 if chain == 'sha256':
-    check(fork is None, '0005: no blake2b_fork on the SHA256 chain')
+    check(fork is None, '0006: no blake2b_fork on the SHA256 chain')
 else:
     want = acli('getblockhash', str(act))
     check(fork == {'height': act, 'hash': want, 'header_bytes': 164, 'block_hash': 'blake2b'},
-          f"0005: blake2b_fork = {fork} (want height {act}, hash {want})")
+          f"0006: blake2b_fork = {fork} (want height {act}, hash {want})")
     hdr = c.call('blockchain.block.header', act + 1)['result']
     check(len(hdr) == 328, f'v2 header served at {act + 1} ({len(hdr) // 2} bytes)')
 

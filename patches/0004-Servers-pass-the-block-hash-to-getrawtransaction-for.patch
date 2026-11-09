@@ -1,21 +1,27 @@
-From 921cde8fbe857f1bb216756a12f13f48db69fbac Mon Sep 17 00:00:00 2001
+From 094efa6b5c9295c9189e2f63256f148c19a1fb76 Mon Sep 17 00:00:00 2001
 From: Paul Lamb <paul@paulscode.com>
 Date: Sun, 8 Nov 2026 14:35:35 -0600
-Subject: [PATCH 3/5] Servers: pass the block hash to getrawtransaction for an
+Subject: [PATCH 4/6] Servers: pass the block hash to getrawtransaction for an
  indexed transaction
 
 blockchain.transaction.get forwarded getrawtransaction <txid> <verbose>
 with no block hash. For a confirmed transaction bitcoind can answer that
-only with -txindex, and a pruned node cannot have -txindex (Core and Knots
-refuse the combination), so every confirmed lookup failed against one.
+only with -txindex, and a pruned node cannot have -txindex (Core and
+Knots refuse the combination), so every confirmed lookup failed against
+one.
 
 Fulcrum already knows where each transaction is: txhash2txnum gives its
 height, and the header gives the block hash, the lookup behind
-blockchain.transaction.get_confirmed_blockhash. Do that lookup in a worker
-thread, then pass the hash. bitcoind then needs only the block, which
-btc-rpc-proxy fetches from peers when the node has pruned it (proxy
-v0.8.0 and later). The hash comes from BTC::HeaderHashRev, so a BLAKE2b
-block is named by its BLAKE2b id.
+blockchain.transaction.get_confirmed_blockhash. Do that lookup in a
+worker thread, then pass the hash. bitcoind then needs only the block,
+which a proxy such as btc-rpc-proxy (v0.8.0 and later) fetches from
+peers when the node has pruned it. An archival node answers it with or
+without -txindex, and with -txindex it consults the index first, so this
+costs it nothing.
+
+Only for nodes that take the block hash (getRawTransactionTakesBlockHash,
+Core, Knots and Litecoin 0.16+); any other node is asked exactly as
+before.
 
 A transaction not in the index (unconfirmed, or unknown) is still asked
 for without a hash, which finds it in the mempool. When that fails, the
@@ -26,28 +32,32 @@ code and the ElectrumX-style formatting.
 The bitcoind request is counted against the client's throttle up front,
 on the client thread, as the request is read. Counted only when it
 reached bitcoind, after the lookup on the thread pool, the throttle bit
-too late: one client pipelined tens of thousands of lookups (each a block
-fetched from peers on a pruned node) before its reads were paused, where
-every other bitcoind-backed method stops at 50. generic_async_to_bitcoind
-gains an alreadyCounted flag; the throttle block moved, unchanged, into
-bdThrottleCount. The lookup never throws, so the count is always undone.
+too late: one client could pipeline tens of thousands of lookups (each a
+block fetched from peers, on a pruned node) before its reads were
+paused, where every other bitcoind-backed method stops at 50.
+generic_async_to_bitcoind gains an alreadyCounted flag, and the throttle
+block moved, unchanged, into bdThrottleCount. The lookup never throws,
+and generic_do_async gains an optional onFail for a job the pool
+refuses, so the count is always undone.
 
-The reply is relayed only if it is the transaction asked for (txid of the
-raw hex, or the verbose txid): with a block hash it can come from a block
-fetched from peers through a proxy.
+The reply is relayed only if it is the transaction asked for (txid of
+the raw hex, or the verbose txid): with a block hash it can come from a
+block fetched from peers through a proxy.
 
 A lookup that names a block gets the operator's bitcoind_timeout rather
 than the fixed 15 s Fulcrum gives every client-originated request: on a
 pruned node the block may be fetched from peers, which can take longer
-(up to 40 s measured on a live server with Tor and I2P peers). Shown on
-regtest with a relay holding each such request for 20 s.
+(up to 40 s measured on a live server with Tor and I2P peers).
+
+The block hash comes from BTC::HeaderHashRev, so a block past the
+BLAKE2b fork is named by its BLAKE2b id.
 ---
- src/Servers.cpp | 139 +++++++++++++++++++++++++++++++++++++++---------
- src/Servers.h   |  11 +++-
- 2 files changed, 124 insertions(+), 26 deletions(-)
+ src/Servers.cpp | 171 ++++++++++++++++++++++++++++++++++++++++--------
+ src/Servers.h   |  15 ++++-
+ 2 files changed, 155 insertions(+), 31 deletions(-)
 
 diff --git a/src/Servers.cpp b/src/Servers.cpp
-index 7e55386..34d311e 100644
+index 7e55386..10de9fd 100644
 --- a/src/Servers.cpp
 +++ b/src/Servers.cpp
 @@ -327,7 +327,7 @@ namespace {
@@ -79,7 +89,29 @@ index 7e55386..34d311e 100644
      }
  
      /// used internally by RPC methods. Given a hashHex, ensure it's 32 bytes (or DataLen) of hash data and nothing else.
-@@ -850,19 +861,9 @@ void ServerBase::generic_do_async(Client *c, RPC::BatchId batchId, const RPC::Me
+@@ -776,7 +787,7 @@ requires
+     // and CompletionFunc must either be nullptr or must accept 1 arg, the result of invoking WorkFunc
+     && (std::is_same_v<CompletionFunc, std::nullptr_t> || requires (CompletionFunc c, WorkFunc w) { c(w()); })
+ void ServerBase::generic_do_async(Client *c, RPC::BatchId batchId, const RPC::Message::Id &reqId, WorkFunc && work,
+-                                  CompletionFunc && completion, int priority)
++                                  CompletionFunc && completion, int priority, const std::function<void()> &onFail)
+ {
+     // Defensive programming checks in case `work` or `completion` are std::functions that contain no target (are null)
+     if constexpr (std::is_constructible_v<bool, WorkFunc>)
+@@ -843,26 +854,20 @@ void ServerBase::generic_do_async(Client *c, RPC::BatchId batchId, const RPC::Me
+                 emit c->sendError(false, RPC::ErrorCodes::Code_InternalError, e.what(), batchId, reqId);
+             }
+         },
+-        // default fail function just sends json rpc error "internal error: <message>"
+-        defaultTPFailFunc(c, batchId, reqId),
++        // default fail function just sends json rpc error "internal error: <message>", after the caller's onFail
++        onFail ? ThreadPool::FailFunc([onFail, fail = defaultTPFailFunc(c, batchId, reqId)](const QString &what) {
++                     onFail();
++                     fail(what);
++                 })
++               : defaultTPFailFunc(c, batchId, reqId),
+         // lower is sooner, higher is later. Default 0.
+         priority
      );
  }
  
@@ -101,7 +133,7 @@ index 7e55386..34d311e 100644
      {
          const int bdReqHi = options->bdReqThrottleParams.load().hi;
          ++c->perIPData->bdReqCtr; // increase bitcoind request counter (per-IP, owned by multiple threads)
-@@ -889,6 +890,30 @@ void ServerBase::generic_async_to_bitcoind(Client *c, const RPC::BatchId batchId
+@@ -889,6 +894,30 @@ void ServerBase::generic_async_to_bitcoind(Client *c, const RPC::BatchId batchId
          }
      }
      // /Throttling support
@@ -132,7 +164,7 @@ index 7e55386..34d311e 100644
      bitcoindmgr->submitRequest(c, newId(), method, params,
          // success
          [c, batchId, reqId, successFunc](const RPC::Message & reply) {
-@@ -934,7 +959,7 @@ void ServerBase::generic_async_to_bitcoind(Client *c, const RPC::BatchId batchId
+@@ -934,7 +963,7 @@ void ServerBase::generic_async_to_bitcoind(Client *c, const RPC::BatchId batchId
          // use default function on failure, sends json rpc error "internal error: <message>"
          defaultBDFailFunc(c, batchId, reqId),
          // timeout
@@ -141,7 +173,7 @@ index 7e55386..34d311e 100644
          // optional response caching control
          useCacheIfNotOlderThan
      );
-@@ -2279,18 +2304,82 @@ void Server::rpc_blockchain_transaction_get(Client *c, const RPC::BatchId batchI
+@@ -2279,18 +2308,102 @@ void Server::rpc_blockchain_transaction_get(Client *c, const RPC::BatchId batchI
              throw RPCError("Invalid verbose argument; expected boolean");
          verbose = verbArg;
      }
@@ -154,18 +186,36 @@ index 7e55386..34d311e 100644
 -            // clients... TODO: see if this can be removed in favor of a more canonical error message.
 -            throw RPCError(formatBitcoinDErrorResponseToLookLikeDumbElectrumXPythonRepr(errResponse),
 -                           RPC::Code_App_DaemonError);
+-        }
++    if (!bitcoindmgr->getRpcSupportInfo().getRawTransactionTakesBlockHash) {
++        // A node that takes no block hash finds a confirmed transaction only with -txindex: ask as always.
++        generic_async_to_bitcoind(c, batchId, m.id, "getrawtransaction", QVariantList{ Util::ToHexFast(txHash), verbose },
++            // use the default success func, which just echoes the bitcoind reply to the client
++            BitcoinDSuccessFunc(),
++            // error func, throw an RPCError
++            [](const RPC::Message & errResponse) {
++                // EX does this weird thing.. we do it too for now until we can verify not doing it won't break old EC
++                // clients... TODO: see if this can be removed in favor of a more canonical error message.
++                throw RPCError(formatBitcoinDErrorResponseToLookLikeDumbElectrumXPythonRepr(errResponse),
++                               RPC::Code_App_DaemonError);
++            }
++        );
++        return; // <-- do nothing right now. Will respond when daemon calls us back in callbacks above.
++    }
 +    // Find the block holding this transaction in our own index, and hand its hash to bitcoind. Without a block hash,
 +    // bitcoind can find a confirmed transaction only with -txindex, which a pruned node cannot have. With one, it needs
-+    // only the block, which btc-rpc-proxy fetches from peers when the node has pruned it. A transaction we have not
-+    // indexed (unconfirmed, or unknown) is asked for without a hash, which still finds a mempool transaction.
++    // only the block, which a proxy such as btc-rpc-proxy (v0.8.0 and later) fetches from peers when the node has
++    // pruned it. A transaction we have not indexed (unconfirmed, or unknown) is asked for without a hash, which still
++    // finds a mempool transaction.
 +    //
 +    // The bitcoind request is counted against the client's throttle here, on the client thread, as the request is
-+    // read: counting it only when it reaches bitcoind, after the lookup on the thread pool, let a client pipeline tens
-+    // of thousands of them (each a block fetched from peers on a pruned node) before the pause could take effect.
++    // read. Counted only when it reached bitcoind, after the lookup on the thread pool, a client could pipeline tens of
++    // thousands of them (each a block fetched from peers, on a pruned node) before the pause took effect.
 +    bdThrottleCount(c);
 +    struct Lookup { QByteArray blockHashHex; QString error; };
 +    generic_do_async(c, batchId, m.id,
-+        // runs in a worker thread: the lookup reads the database. Never throws, so the count above is always undone.
++        // runs in a worker thread: the lookup reads the database. Never throws, so the completion (or, if the pool
++        // refuses the job, onFail below) always undoes the count above.
 +        [txHash, this] {
 +            Lookup ret;
 +            try {
@@ -227,7 +277,10 @@ index 7e55386..34d311e 100644
 +                // operator configured for the node (bitcoind_timeout). A mempool lookup keeps the default.
 +                blockHashHex.isEmpty() ? 0 : options->bdTimeoutMS
 +            );
-         }
++        },
++        0, // priority
++        // the pool refused the job, so neither of the above runs: undo the count
++        [c] { bdThrottleUncount(c); }
      );
 -    // <-- do nothing right now, return without replying. Will respond when daemon calls us back in callbacks above.
 +    // <-- do nothing right now, return without replying. Will respond when the callbacks above complete.
@@ -235,10 +288,28 @@ index 7e55386..34d311e 100644
  void Server::rpc_blockchain_transaction_get_confirmed_blockhash(Client *c, const RPC::BatchId batchId, const RPC::Message &m)
  {
 diff --git a/src/Servers.h b/src/Servers.h
-index 48b1f77..3ee6439 100644
+index 48b1f77..ae70357 100644
 --- a/src/Servers.h
 +++ b/src/Servers.h
-@@ -301,7 +301,16 @@ protected:
+@@ -285,6 +285,8 @@ protected:
+     /// sent instead.  Note that all other exceptions also end up sent to the client as "internal error: MESSAGE".
+     /// The optional `CompletionFunc` is used if you want to override the default behavior of sending results to
+     /// the client to do additional processing (see rpc_blockchain_transaction_broadcast_package for example).
++    /// The optional `onFail` runs, in the client thread, if the threadpool fails the job (e.g. its job limit is
++    /// exceeded), in which case neither `work` nor the completion runs; the error reply is sent after it.
+     template <std::invocable WorkFunc, typename CompletionFunc = std::nullptr_t>
+     requires
+         // WorkFunc must not return void
+@@ -292,7 +294,7 @@ protected:
+         // and CompletionFunc must either be nullptr or must accept 1 arg, the result of invoking WorkFunc
+         && (std::is_same_v<CompletionFunc, std::nullptr_t> || requires (CompletionFunc c, WorkFunc w) { c(w()); })
+     void generic_do_async(Client *client, RPC::BatchId, const RPC::Message::Id &reqId, WorkFunc && work,
+-                          CompletionFunc && = {}, int priority = 0);
++                          CompletionFunc && = {}, int priority = 0, const std::function<void()> &onFail = {});
+ 
+     void generic_async_to_bitcoind(Client *client,
+                                    RPC::BatchId batchId, ///< if running in batch context, will be !batchId.isNull()
+@@ -301,7 +303,16 @@ protected:
                                     const QVariantList &params, ///< params for bitcoind method
                                     const BitcoinDSuccessFunc & successFunc,
                                     const BitcoinDErrorFunc & errorFunc = BitcoinDErrorFunc(),
