@@ -4,139 +4,221 @@
 
 # Fulcrum Pruned on StartOS
 
-Technical reference for this package, for an administering or support agent. End-user docs are in
-`instructions.md`.
+> Everything not listed in this document should behave the same as upstream
+> Fulcrum. If a feature, setting, or behavior is not mentioned here, the upstream
+> documentation is accurate and fully applicable — see the Documentation section of
+> `instructions.md` for links.
 
-Fulcrum Pruned is [Fulcrum](https://github.com/cculianu/Fulcrum) 2.1.4, through
-[privkeyio's BLAKE2b-aware fork](https://github.com/privkeyio/Fulcrum), with five patches that
-let it index and serve a **pruned** node. It serves either chain, SHA256 or BLAKE2b, through
-**Select Node**, and installs alongside Electrs Pruned (a different package id), so a server with
-two pruned nodes can run an Electrum server for each.
+Fulcrum Pruned is [Fulcrum](https://github.com/cculianu/Fulcrum), a fast Electrum server, through
+[privkeyio's BLAKE2b-aware fork](https://github.com/privkeyio/Fulcrum), with five patches that let
+it index and serve a **pruned** Bitcoin node through the node's btc-rpc-proxy. It follows either
+chain, SHA256 or BLAKE2b, through Select Node, and installs alongside Electrs Pruned (a different
+package id), so a server with two pruned nodes can run an Electrum server for each.
 
-## Identity
+---
 
-| | |
+## Table of Contents
+
+- [Image and Container Runtime](#image-and-container-runtime)
+- [Volume and Data Layout](#volume-and-data-layout)
+- [File Models](#file-models)
+- [Dependencies](#dependencies)
+- [Network Access and Interfaces](#network-access-and-interfaces)
+- [Installation and First-Run Flow](#installation-and-first-run-flow)
+- [Actions](#actions)
+- [Tasks](#tasks)
+- [Health Checks](#health-checks)
+- [Backups and Restore](#backups-and-restore)
+- [Limitations and Differences](#limitations-and-differences)
+- [Quick Reference for AI Consumers](#quick-reference-for-ai-consumers)
+
+---
+
+## Image and Container Runtime
+
+The image is built from this repository's `Dockerfile`: the `fulcrum` submodule (a pinned tag of
+privkeyio/Fulcrum) with `patches/` applied at `--fuzz=0`, on Debian with Qt 6. It is built for
+x86_64 and aarch64 and never offered under emulation. The binary reports its commit as
+`<commit>+pruned`.
+
+| Patch | What it changes |
 |---|---|
-| Package id | `fulcrum-pruned` (never `fulcrum`, the official id, which privkeyio's BLAKE2b package also takes) |
-| Version | `2.1.4:0`; StartOS 0.4.0.2 or newer (`osVersion`) |
-| start-sdk | 3.1.1 (3.0.4 or newer is required for the LISTEN-only `checkPortListening`) |
-| Image | built from the repo-root `Dockerfile`: the `fulcrum` submodule (privkeyio `v2.1.4-blake`, 2146398) plus `patches/`, Debian 13.1, Qt 6 |
-| Architectures | x86_64, aarch64 (`emulateMissing: false`) |
+| 0001 | A bitcoind reply with no `content-type` is accepted: btc-rpc-proxy omits it on the pruned blocks and transactions it builds itself. |
+| 0002 | Blocks are requested with `getblock <hash> 0`; the proxy serves a pruned block only for a numeric verbosity. |
+| 0003 | `blockchain.transaction.get` names the block, found in Fulcrum's own index, so no `txindex` is needed; counted against the client's throttle as it is read; given `bitcoind_timeout`; the reply must be the transaction asked for; a txid not in the index gets "not in the index of this server" instead of the node's txindex advice. |
+| 0004 | The startup check asks for transaction #1 by its block and, on failure, names the proxy; it stops after three failures. |
+| 0005 | `server.features.blake2b_fork = {height, hash, header_bytes: 164, block_hash: "blake2b"}` on a chain with extended headers, absent otherwise (the shape Electrs Pruned uses). |
 
-## The patches
+One subcontainer, `primary-sub`, runs the daemon `primary`: a short shell loop that waits up to five
+minutes for the node's RPC cookie, then `Fulcrum --ts-format none /data/fulcrum.conf`.
 
-See `patches/README.md`. In short, against a node whose RPC is fronted by btc-rpc-proxy:
+## Volume and Data Layout
 
-1. A reply with no `content-type` is accepted (the proxy omits it on the replies it builds).
-2. `getblock <hash> 0`, not `false`: the proxy serves pruned blocks only for numeric verbosity.
-3. `blockchain.transaction.get` passes the block hash from Fulcrum's own index, so no `txindex`
-   is needed; an unknown txid gets "not in the index of this server" rather than txindex advice.
-   Counted against the client's throttle as it is read, and the reply checked to be the
-   transaction asked for.
-4. The startup check asks for tx #1 by block hash and names the proxy if that fails (three tries).
-5. `server.features.blake2b_fork = {height, hash, header_bytes: 164, block_hash: "blake2b"}` on a
-   chain with extended headers; absent otherwise. Same shape as Electrs Pruned.
+One volume, `main`, mounted at `/data`; the selected node's volume is mounted read-only at
+`/mnt/bitcoind` (for its cookie and its `bitcoin.conf`) while that node is installed.
 
-## Nodes (Select Node)
-
-`startos/backends.ts`. Exactly one is required at a time; each is an optional dependency enabled
-only while selected (`dependencies.ts`).
-
-| id | title | RPC | health checks required | version floor |
-|---|---|---|---|---|
-| `bitcoind` | Bitcoin Knots | `rpc`:8332 | `bitcoind`, `sync-progress` | Start9's Fulcrum range (proxy v0.8.1+ builds) plus `>=#knots:29.4.2:4` (Retropex BLAKE2b, unpruned only) |
-| `knots-prerdts` | Bitcoin Knots (SHA256) Companion | `rpc`:8332 | `bitcoind`, `sync-progress` | `>=#knotsprerdts:29.3:29` |
-| `knots-blake2b` | Bitcoin Knots (BLAKE2b) Companion | `rpc`:18443 | `node`, `chain` | `>=29.4.3:1` (proxy advertising NODE_BLAKE2B) |
-
-When a node prunes, its `rpc` host is served by its btc-rpc-proxy, which fetches discarded blocks
-from peers. The node package runs the proxy; this one never configures it. There is **no
-autoconfig task**: no prune, txindex or ZeroMQ requirement. ZeroMQ is used if the node has it on
-(found with `getzmqnotifications`); otherwise Fulcrum polls every 2 s.
-
-On a fresh install, `init/chooseBackend.ts` selects the only installed supported node, or raises a
-critical Select Node task when there are several or none.
-
-The node's RPC address is resolved over the LXC bridge each start (`getBridgeAddress(...).const()`).
-Its `main` volume is mounted read-only at `/mnt/bitcoind` for the cookie
-(`/mnt/bitcoind/.cookie` on mainnet, `/mnt/bitcoind/<chain>/.cookie` otherwise). Fulcrum re-reads
-the cookie on every request; the daemon waits up to 5 minutes for it before starting Fulcrum.
-
-## Volume layout (`main`, mounted at `/data`)
-
-| path | what |
+| Path | What |
 |---|---|
-| `fulcrum.conf` | Fulcrum's config (file model `fileModels/fulcrum.conf.ts`) |
-| `banner.txt` | optional server banner (Configure) |
-| `store.json` | `backend` (selected node), `synced` (nodes whose index has completed), `indexesChangedAt` (written when an index is set aside or deleted, so Delete Unused Indexes re-evaluates) |
-| `db/<node id>/` | that node's Fulcrum datadir (`fulc2_db`, `latch`); about 190 GB on mainnet |
-| `db/<node id>.chain.json` | what the index was built on: genesis hash once Fulcrum is indexing, the block hash at 961640 once the index has passed it (chain guard) |
-| `db/<node id>.wrong-chain-<time>/` | an index set aside by the chain guard |
-| `reindex.request` | marker left by Reindex, consumed at the next start |
+| `fulcrum.conf` | Fulcrum's config (see File Models) |
+| `banner.txt` | the server banner, if one is set |
+| `store.json` | StartOS-side state: the selected node, which nodes' indexes are complete, whether `db_mem` is the package's to adjust |
+| `db/<node id>/` | that node's Fulcrum datadir (RocksDB `fulc2_db`), about 190 GB on mainnet |
+| `db/<node id>.chain.json` | what that index was built on: the genesis hash, and the block hash at 961640 once the index has passed it |
+| `db/<node id>.wrong-chain-<time>/` | an index the chain guard set aside |
+| `reindex.request` | a Reindex marker naming its node, consumed at the next start |
 
-### fulcrum.conf
+Fulcrum cannot rewind an index across the SHA256/BLAKE2b split (the chains differ from block 961640,
+far past its undo depth), so each node has its own database and nothing is shared or trimmed.
 
-Owned by the package: `datadir` (`/data/db/<node id>`), `bitcoind` (bridge address), `rpccookie`,
-`tcp = 0.0.0.0:50001`, `peering = false`, `announce = false`, `banner`. Exposed in Configure:
-`bitcoind_timeout` (seeded 120 s at install; Fulcrum's default is 30), `bitcoind_clients` (seeded at install for about 32 requests in flight: 7 on 4 cores, 3 from 8 cores up),
-`worker_threads`, `db_mem` (seeded at install, lowered after a node's first complete index unless
-the user set it), `db_max_open_files`, `max_history`. `max_reorg` is left at Fulcrum's default.
+## File Models
 
-## One index per node, and the chain guard
+`fulcrum.conf` (INI) is rewritten on every start for the keys the package owns: `datadir`
+(`/data/db/<node id>`), `bitcoind` (the node's bridge address), `rpccookie` (its cookie, at the root
+on mainnet or in the chain's subdirectory), `tcp = 0.0.0.0:50001`, `peering` and `announce` (both
+false), `banner`. A hand edit to these does not survive.
 
-Fulcrum cannot rewind across the SHA256/BLAKE2b split (blocks from 961640 differ, ~15,000 deep,
-far past its 100-block undo depth; it exits fatally). So each node has its own database, and
-nothing is shared or trimmed. Switching back to a node indexed before is immediate; a new node is
-a full index.
+The rest belong to Configure: `bitcoind_timeout`, `bitcoind_clients`, `worker_threads`, `db_mem`,
+`db_max_open_files`, `max_history`. At install the package seeds `bitcoind_timeout` (120 s),
+`bitcoind_clients` (sized for about 32 block requests in flight: 7 on 4 cores, Fulcrum's own 3 from
+8 cores up) and `db_mem` (a quarter of RAM, capped). Clearing a field in Configure returns it to the
+package default. Two values are clamped on every start whoever set them: `worker_threads` above the
+core count is removed (Fulcrum would exit), and `db_mem` above half the RAM is lowered.
 
-Because the `bitcoind` id can hold either chain (and a node can change network),
-`chainGuard.ts` keeps a record beside each database of what the index itself was built on: the
-genesis hash once Fulcrum is indexing (it exits on a genesis mismatch, so a moving index agrees),
-and the block hash at 961640 once the index has passed it, both taken from Fulcrum's log, never
-from whichever node happens to be connected. Before each start it waits for the node (up to five
-minutes) and, if the record disagrees, renames the database to `<node id>.wrong-chain-<time>`,
-notifies, and lets Fulcrum build a new one. A database with no record, or one still below the
-split, is valid on both chains and is never judged.
+`db_mem` is the package's to adjust until the user sets it: larger while a node's index builds,
+smaller once it is complete (one restart). A value entered in Configure is never changed; clearing
+the field hands it back (`store.json` `dbMemAuto`).
 
-## Interfaces
+`banner.txt` is written by Configure and re-read by Fulcrum on every `server.banner`.
 
-Host `main`, interface `main` ("Electrum (SSL)"), container port 50001, SSL terminated by StartOS.
-Preferred external ports **50012 (SSL)** and **50011 (TCP)**, deliberately not the 50002/50001
-Electrs Pruned and the official Fulcrum prefer. The plain TCP port is reachable only over the LXC
-bridge. `startos/utils.ts` exports `mainHostId = 'main'` and `electrumPort = 50001` for dependents
-(the Frigate companions); keep them stable.
+## Dependencies
+
+Exactly one Bitcoin node, chosen with Select Node; the other two are optional dependencies that stay
+disabled. Its RPC is reached over the bridge (its btc-rpc-proxy when it prunes), and its `main`
+volume is mounted read-only at `/mnt/bitcoind`.
+
+| Node | Package | Health checks required |
+|---|---|---|
+| Bitcoin Knots (Start9's Core or Knots, or Retropex's BLAKE2b Knots unpruned) | `bitcoind` | `bitcoind`, `sync-progress` |
+| Bitcoin Knots (SHA256) Companion | `knots-prerdts` | `bitcoind`, `sync-progress` |
+| Bitcoin Knots (BLAKE2b) Companion | `knots-blake2b` | `node`, `chain` |
+
+The version floors (in `startos/backends.ts`) admit only node releases whose proxy can serve a pruned
+transaction by block hash and follow a rotated cookie, and on the BLAKE2b chain advertise
+`NODE_BLAKE2B` to peers. The package raises no task on the node: no `prune: 0`, no `txindex`, no
+ZeroMQ. ZeroMQ is used if the node has it on; otherwise Fulcrum polls every two seconds.
+
+## Network Access and Interfaces
+
+One interface, `main` ("Electrum (SSL)"), on host `main`, container port 50001: the Electrum
+protocol, TLS terminated by StartOS. It prefers external ports 50012 (SSL) and 50011 (TCP), so a
+server running Electrs Pruned (50002/50001) gets different ones; the plain TCP port is reachable only
+over the LXC bridge. Fulcrum opens the port only once its index has caught up with the node, so
+wallets cannot connect during a first index. `startos/utils.ts` exports `mainHostId` and
+`electrumPort` for dependents.
+
+## Installation and First-Run Flow
+
+On install the package seeds `fulcrum.conf` (see File Models) and settles the node: with exactly one
+supported node installed it selects it; with several, or none, it raises a critical Select Node task
+rather than guess, because `bitcoind` is SHA256 on one server and BLAKE2b on another.
+
+The first start of a node builds its index from genesis. Below the node's prune height every block
+is fetched from peers through the proxy, so a first index against a long-pruned node takes several
+days, longer over Tor; installed while the node is still in its initial sync, Fulcrum takes blocks
+before they are pruned. An interrupted index resumes.
 
 ## Actions
 
-- **Configure**: banner and the performance settings above.
-- **Select Node** (`select-backend`): writes `store.json` `backend`; main opens that node's database.
-- **Delete Unused Indexes** (`delete-unused-indexes`): every `db/` directory except the selected
-  node's, with sizes; deletes the chosen ones. Disabled when there are none.
-- **Reindex**: deletes the selected node's database (and chain record) on the next start.
+The OS lists the actions; this is what it cannot say.
 
-## Health checks
+- **Configure**: when tuning performance or the banner. Rewrites the Configure-owned keys in
+  `fulcrum.conf` and restarts Fulcrum; safe to repeat. Raise `bitcoind_timeout` if wallets report
+  "bitcoind request timed out" for old transactions.
+- **Select Node**: when the wallet should follow another node or chain. Writes `store.json` and
+  restarts Fulcrum on that node's database: immediate for a node indexed before, a full first index
+  (~190 GB, days) for a new one. The previous index is kept. Safe to repeat.
+- **Delete Unused Indexes**: to reclaim disk. Lists every database except the selected node's
+  (including set-aside ones) with its size and deletes those ticked; a deleted node's index must be
+  built again if selected later. No restart. Enabled only when there is something to delete.
+- **Reindex**: only for a corrupted index (Fulcrum keeps stopping, the logs report a corrupted
+  database). Deletes the selected node's database at the next start; unavailable for as long as a
+  first index takes. Not for switching nodes.
 
-- `primary` ("Electrum (SSL)"): success when Fulcrum has a socket in LISTEN on 50001 (the SDK's
-  `checkPortListening`, LISTEN-only since start-sdk 3.0.4). Fulcrum opens the port only once its
-  index has caught up, so during a build this reads loading. "Waiting for <node> to start" while
-  the node's cookie is absent.
-- `sync-progress`: success when listening; otherwise the indexed height out of the node's height
-  and a percentage, parsed from Fulcrum's log; "Waiting for Bitcoin to provide historical blocks"
-  when the node itself is missing them.
-- `synced-true` (oneshot): the per-node "Sync Complete" notification and the `db_mem` drop.
+## Tasks
 
-The ids `primary` and `sync-progress` match the official Fulcrum package; dependents gate on them.
+One: **Select Node**, critical, raised at install when more than one supported node is installed, or
+none. It keeps the service stopped until the user chooses; running Select Node clears it, and it does
+not return. No task is raised on the node.
 
-## Backups
+## Health Checks
 
-The volume minus `/db`. A restore rebuilds every index; `main` resets a node's "synced" state when
-its database is missing.
+Two checks, both reading Fulcrum's state, not just its port.
 
-## Limits and differences from the official package
+- **`primary`** ("Electrum (SSL)"): success when Fulcrum has a socket in LISTEN on 50001. Before that:
+  "Waiting for <node> to start" while the node's cookie is absent (the node is stopping or
+  restarting; not a fault), "Fulcrum opens the Electrum interface once its index has caught up" while
+  indexing, or a **failure** carrying Fulcrum's last `FATAL:` line when it keeps exiting (a value it
+  refuses, a corrupted database: see Reindex).
+- **`sync-progress`**: success when listening. Otherwise the indexed height out of the node's, with a
+  percentage, from Fulcrum's log; "Waiting for Bitcoin to provide historical blocks" when the node
+  itself lacks them; the same failure as above in a crash loop.
 
-- No txindex, no prune requirement, no ZeroMQ requirement.
-- About 190 GB per node indexed; Delete Unused Indexes reclaims it.
-- A first index against an already-pruned node takes several days (longer over Tor):
-  every block below the prune point is fetched from peers through the proxy.
-- On the BLAKE2b chain, headers from 961640 are 164 bytes and served as such; only BLAKE2b-aware
-  wallets can follow that chain.
-- Unofficial and not audited, as is the fork it builds on.
+The ids match the official Fulcrum package; dependents gate on them. A **Sync Complete** notification
+is sent once per node when its index first completes; **Index set aside** when the chain guard moves
+an index from another chain; **Index rebuilt** when an unreadable index is deleted.
+
+## Backups and Restore
+
+The `main` volume is copied whole except `/db`: every index, chain record and set-aside index is
+left out, since each is rebuilt from its node. A restored instance keeps its node selection and
+settings and builds the selected node's index again from genesis (days, as a first index). Its Sync
+Complete fires again.
+
+## Limitations and Differences
+
+1. No `txindex`, no prune requirement, no ZeroMQ requirement: the node's btc-rpc-proxy supplies what
+   a pruned node no longer has.
+2. About 190 GB per node indexed; indexes of nodes no longer selected stay until deleted.
+3. A first index against an already-pruned node takes several days, longer over Tor.
+4. A wallet looking up an old transaction on a pruned node waits for its block to be fetched from
+   peers (seconds, up to `bitcoind_timeout`).
+5. On the BLAKE2b chain, headers from block 961640 are 164 bytes: only BLAKE2b-aware wallets follow
+   it.
+6. A node replaced under the same id by one on another chain or network: the chain guard sets the
+   old index aside and builds a new one, once the new node has reached the block that tells them
+   apart (961640, or genesis for another network).
+7. Retropex's BLAKE2b Knots under `bitcoind` is supported unpruned only.
+8. Peering and announcing to the public Electrum network are off.
+9. Unofficial and not audited, as is the fork it builds on.
+
+---
+
+## Quick Reference for AI Consumers
+
+```yaml
+package_id: fulcrum-pruned
+image: built from ./Dockerfile (fulcrum submodule + patches/)
+architectures: [x86_64, aarch64]
+subcontainers: [primary-sub]
+volumes:
+  main: /data
+  node volume (read-only): /mnt/bitcoind
+file_models:
+  - fulcrum.conf
+  - banner.txt
+  - store.json
+startos_managed_env_vars: []
+dependencies: [bitcoind, knots-prerdts, knots-blake2b]  # exactly one enabled, by Select Node
+interfaces:
+  main: { type: api, port: 50001 }
+actions:
+  - configure
+  - select-backend
+  - delete-unused-indexes
+  - reindex
+tasks:
+  - { action: select-backend, severity: critical }
+health_checks:
+  - primary
+  - sync-progress
+```

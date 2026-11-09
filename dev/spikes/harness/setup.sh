@@ -110,6 +110,7 @@ tcp = 127.0.0.1:$FULCRUM_TCP
 peering = false
 announce = false
 bitcoind_timeout = 120
+${FULCRUM_DEBUG:+debug = true}
 EOF
   docker rm -f fulcrum-harness >/dev/null 2>&1 || true
   docker run -d --name fulcrum-harness --network host -u "$(id -u):$(id -g)" -e HOME=/tmp \

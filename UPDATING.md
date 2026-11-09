@@ -1,11 +1,27 @@
-# Updating the upstream version
+# Updating
 
 The image is built from the `fulcrum` submodule, pinned to a tag of
 [privkeyio/Fulcrum](https://github.com/privkeyio/Fulcrum) (BLAKE2b header support over
 [cculianu/Fulcrum](https://github.com/cculianu/Fulcrum)), plus this package's `patches/`.
 An upstream Fulcrum release reaches this package once privkeyio merges and tags it.
 
-## Determining the upstream version
+## The patch working tree
+
+The patches are made in a branch `pruned` of a privkeyio/Fulcrum clone, checked out as a git
+worktree at `dev/spikes/fulcrum-src` (ignored by git). On a fresh clone of this repository,
+recreate it from the pinned tag and the patches:
+
+```sh
+git clone https://github.com/privkeyio/Fulcrum ../Fulcrum-blake2b   # anywhere outside this repo
+git -C ../Fulcrum-blake2b worktree add "$PWD/dev/spikes/fulcrum-src" -b pruned v2.1.4-blake
+git -C dev/spikes/fulcrum-src am "$PWD"/patches/*.patch
+```
+
+`dev/spikes/build.sh [test]` builds it in the dev image (build that first:
+`docker build -t fulcrum-pruned-dev dev/spikes/devimage`), and `dev/spikes/harness/` is the
+regtest harness (`setup.sh` and `check.py`; see the comments at their tops).
+
+## A new Fulcrum version
 
 ```sh
 gh release view -R cculianu/Fulcrum --json tagName -q .tagName
@@ -15,25 +31,30 @@ gh release list -R privkeyio/Fulcrum -L 5
 The version the fork builds is `VERSION` in `fulcrum/src/Common.h`. Pin a tag (`vX.Y.Z-blake`),
 never a branch.
 
-## Applying the bump
-
-1. Rebase the patch series onto the new tag, in a working branch of the fork (kept as a git
-   worktree of a privkeyio/Fulcrum clone at `dev/spikes/fulcrum-src`, branch `pruned`; ignored):
+1. Rebase the series onto the new tag in the working tree:
 
    ```sh
-   git rebase --onto <new tag> <old tag> pruned
+   git -C ../Fulcrum-blake2b fetch --tags origin
+   git -C dev/spikes/fulcrum-src rebase --onto <new tag> <old tag> pruned
    ```
 
-   Build with `DEFINES+=ENABLE_TESTS`, run `Fulcrum --test all` from the source directory, and run
-   the regtest harness (`dev/spikes/harness/`, both `CHAIN=sha256` and `CHAIN=blake2b`). Then
-   regenerate:
+   Build with tests (`dev/spikes/build.sh test`), run `Fulcrum --test all` from the source
+   directory, and check that every patch builds and passes on its own. Run the harness on both
+   chains, through the proxy and against the archival node:
+
+   ```sh
+   cd dev/spikes/harness
+   CHAIN=sha256 ./setup.sh up && ./setup.sh fulcrum && python3 -I check.py --wait
+   FULCRUM_NODE=nodeA FULCRUM_BITCOIND_PORT=19101 ./setup.sh fulcrum && python3 -I check.py --wait
+   ./setup.sh clean; CHAIN=blake2b ./setup.sh up   # and the same two runs
+   ```
+
+   Then regenerate the patches, and update the tag named in `patches/README.md`:
 
    ```sh
    rm patches/*.patch
-   git -C <fork tree> format-patch --no-signature -o "$PWD/patches" <new tag>..pruned
+   git -C dev/spikes/fulcrum-src format-patch --no-signature -o "$PWD/patches" <new tag>..pruned
    ```
-
-   Update the tag named in `patches/README.md`.
 
 2. Point the submodule at the tag:
 
@@ -43,9 +64,39 @@ never a branch.
    git add fulcrum
    ```
 
-3. In `startos/versions/current.ts`, set `version` to `<new version>:0`, move the old one into
-   `startos/versions/` as a version file if it was released, and write the release notes.
+3. Bump the version: see below, with `<new version>:0`.
+
+## A package-only release (`2.1.4:1`, and so on)
+
+Move the released version out of `current.ts` into its own file, so the version graph keeps it:
+
+1. Copy `startos/versions/current.ts` to `startos/versions/v2.1.4_0.ts`, rename its export to
+   `v_2_1_4_0`, and keep its migrations with it (a migration stays with the version that
+   needed it).
+2. In `current.ts`, set `version` to the new one, write the release notes, and give it its own
+   migrations (an empty `up` if nothing changes on disk).
+3. In `startos/versions/index.ts`, add the old one to `other`:
+   `VersionGraph.of({ current, other: [v_2_1_4_0] })`.
+
+## Fixes from privkeyio's package
+
+This repository began from privkeyio/fulcrum-startos `v2.1.4-blake_0` (remote `privkeyio`). Its
+later fixes are not merged automatically:
+
+```sh
+git fetch privkeyio --tags
+git log --oneline v2.1.4-blake_0..privkeyio/master -- startos
+```
+
+Port what applies by hand. Most of its `startos/` has been rewritten here (Select Node, one
+index per node, the chain guard), so a merge would mostly conflict.
+
+## Building and releasing
 
 The Makefile passes the submodule's commit, marked `+pruned`, to the image build as
 `FULCRUM_GIT_COMMIT`, so the binary reports what it is. The Dockerfile applies the patches with
-`--fuzz=0`, so a patch that no longer applies fails the build.
+`--fuzz=0`, and fails if there are none, so a patch that no longer applies fails the build.
+
+Use the workspace's `release.sh` (one level up). It builds only from a clean tree, and
+`--publish` refuses an s9pk built from a commit other than HEAD: finish every repository change,
+then build, then sign.

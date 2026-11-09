@@ -9,9 +9,10 @@ export const defaultDbMem = () =>
 
 export const syncedDbMem = () => Math.min(512, defaultDbMem())
 
-// Seeded at install, well above Fulcrum's 30 s: on a pruned node a block below the prune
-// height comes from peers through btc-rpc-proxy, which can take longer than that, over Tor
-// especially. A timeout fails the whole download task and restarts it from the database tip.
+// Seeded at install, well above Fulcrum's 30 s. It governs a wallet's lookup of a transaction in
+// a block the node has pruned (patch 0003; fetched from peers through btc-rpc-proxy, up to ~40 s
+// measured, longer over Tor), the startup check, and catching up one block at a time. The bulk
+// index build is not affected: Fulcrum gives multi-block downloads 10 minutes per request.
 export const defaultBitcoindTimeout = 120
 
 // Seeded at install. Fulcrum keeps about cores x (bitcoind_clients + 1) block requests in flight

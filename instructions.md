@@ -1,12 +1,12 @@
 # Fulcrum Pruned
 
-A fast Electrum server that works with a **pruned** Bitcoin node, on either chain: SHA256 or BLAKE2b.
+**Read "How long the first index takes" and "Disk space" below before relying on it.** Unlike standard Fulcrum it needs neither `txindex` nor an archival node: blocks a pruned node has discarded are fetched from the Bitcoin network through the RPC proxy the node runs whenever pruning is on.
 
-Standard Fulcrum needs an archival node with `txindex`, and asks your node to turn pruning off. This one does not. Blocks your node has already discarded are fetched from the Bitcoin network through the RPC proxy your node runs whenever pruning is on, both while Fulcrum builds its index and when a wallet looks up an old transaction. An archival node works too.
+## Documentation
 
-It installs alongside **Electrs Pruned**, so a server with two pruned nodes (one per chain, say) can run an Electrum server for each.
-
-**Read "How long the first index takes" and "Disk space" below before you install.**
+- [Fulcrum README](https://github.com/cculianu/Fulcrum#readme): the upstream server, its configuration options and the Electrum protocol it serves.
+- [privkeyio's BLAKE2b fork](https://github.com/privkeyio/Fulcrum#readme): what changes on the BLAKE2b chain (164-byte headers, BLAKE2b block ids).
+- [Start9 Bitcoin guides](https://docs.start9.com/bitcoin-guides/): connecting a wallet to your own Electrum server, certificates, SSL and Tor.
 
 ## Getting set up
 
@@ -38,12 +38,12 @@ Fulcrum keeps **one index per node**. Switching nodes keeps the old index, so sw
 
 - **Select Node**: which node to index. Choosing a node indexed before is immediate; a new one needs a full index of its own.
 - **Delete Unused Indexes**: lists the indexes of nodes not selected now, with their sizes, and deletes the ones you tick.
-- **Configure**: server banner and performance settings. The Bitcoin RPC timeout starts at 120 seconds, because fetching a discarded block from the network can be slow.
-- **Reindex**: deletes the selected node's index and builds it again. Only for a corrupted index (Fulcrum keeps crashing with a database error). Not needed when switching nodes.
+- **Configure**: server banner and performance settings. The Bitcoin RPC timeout starts at 120 seconds, because a wallet looking up an old transaction waits while its block is fetched from the network. A value you enter is kept; clearing a field returns it to the default.
+- **Reindex**: deletes the selected node's index and builds it again. Only for a corrupted index: Fulcrum keeps stopping, and its status shows a database error. Not needed when switching nodes.
 
 ## What running against a pruned node costs you
 
-To serve blocks your node no longer stores, the proxy asks Bitcoin peers for them, by block hash. A peer learns which blocks you wanted, never which addresses. During the first index that only says you are syncing. Afterwards, looking up an old transaction or restoring a wallet with old history can fetch a block on demand. If your node runs over Tor, so do these fetches. If that tradeoff is not one you want, use an archival node with the official Fulcrum.
+To serve blocks your node no longer stores, the proxy asks Bitcoin peers for them, by block hash. A peer learns which blocks you wanted, never your addresses. During the first index that only says you are syncing. Afterwards, looking up an old transaction or restoring a wallet with old history can fetch that transaction's block on demand, which tells a watching peer that something in that block interests you. If your node runs over Tor, so do these fetches. If that tradeoff is not one you want, use an archival node with the official Fulcrum.
 
 ## Which chain
 
@@ -51,8 +51,7 @@ Fulcrum Pruned follows the chain of the node you select. Its `server.features` r
 
 If the node behind **Bitcoin Knots** is replaced by one on the other chain, Fulcrum notices, sets the old index aside with a notification, and builds a new one. (An index that has not yet reached the split, block 961,640, is valid on both chains and is kept.)
 
-## Built on
+## Limitations
 
-[Fulcrum](https://github.com/cculianu/Fulcrum) by Calin Culianu, through [privkeyio's BLAKE2b-aware fork](https://github.com/privkeyio/Fulcrum), with five small patches for pruned nodes. Unofficial and not audited.
-
-Support: <https://paulscode.com/c/bitcoin/8>
+- Unofficial and not audited, as is the BLAKE2b fork it builds on.
+- A Retropex BLAKE2b node under **Bitcoin Knots** must be unpruned: its proxy cannot serve BLAKE2b blocks.

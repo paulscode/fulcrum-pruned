@@ -33,6 +33,7 @@ async function markUnsynced(effects: T.Effects, node: BackendId) {
  * an earlier sync. Only our own value is touched; one the user chose in Configure stays theirs.
  */
 async function raiseDbMemForBuild(effects: T.Effects) {
+  if ((await storeJson.read((s) => s.dbMemAuto).once()) === false) return
   if (
     (await fulcrumConf.read((c) => c.db_mem).once()) === syncedDbMem() &&
     syncedDbMem() < defaultDbMem()
@@ -87,7 +88,8 @@ export const main = sdk.setupMain(async ({ effects }) => {
   // build for another node raised it and was switched away from before it finished.
   const synced = (await storeJson.read((s) => s.synced).once()) ?? []
   const dbMem = await fulcrumConf.read((c) => c.db_mem).once()
-  if (syncedDbMem() < defaultDbMem()) {
+  const dbMemAuto = (await storeJson.read((s) => s.dbMemAuto).once()) !== false
+  if (dbMemAuto && syncedDbMem() < defaultDbMem()) {
     if (!synced.includes(backend) && dbMem === syncedDbMem())
       await fulcrumConf.merge(effects, { db_mem: defaultDbMem() })
     if (synced.includes(backend) && dbMem === defaultDbMem())
@@ -497,7 +499,9 @@ exec Fulcrum --ts-format none /data/fulcrum.conf`,
           }
           // Only reclaim what we ourselves seeded; a value the user picked in Configure is theirs.
           const lowerDbMem =
-            conf?.db_mem === defaultDbMem() && syncedDbMem() < defaultDbMem()
+            dbMemAuto &&
+            conf?.db_mem === defaultDbMem() &&
+            syncedDbMem() < defaultDbMem()
 
           // Recorded first, so a oneshot stopped part way cannot announce twice.
           await storeJson.merge(effects, { synced: [...already, backend] })

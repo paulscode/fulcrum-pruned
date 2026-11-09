@@ -1,4 +1,4 @@
-From 739f08e00b9a1d8608dad062d1436701820ce541 Mon Sep 17 00:00:00 2001
+From 34e03e5195adc30d3b380375303c93f16f83f05b Mon Sep 17 00:00:00 2001
 From: Paul Lamb <paul@paulscode.com>
 Date: Sun, 8 Nov 2026 14:39:34 -0600
 Subject: [PATCH 5/5] Servers: report the BLAKE2b fork point in server.features
@@ -95,10 +95,10 @@ index abc2cfa..3c52b2c 100644
      /// once from the hasher into the returned QByteArray.  This is faster than obtaining a uint256 from bitcoin::Hash
      /// then converting to a QByteArray manually.
 diff --git a/src/Servers.cpp b/src/Servers.cpp
-index e294b7d..4e74d6e 100644
+index 34d311e..c24edba 100644
 --- a/src/Servers.cpp
 +++ b/src/Servers.cpp
-@@ -1215,11 +1215,22 @@ void Server::rpc_server_features(Client *c, const RPC::BatchId batchId, const RP
+@@ -1216,11 +1216,22 @@ void Server::rpc_server_features(Client *c, const RPC::BatchId batchId, const RP
  {
      const bool isBCH = coin == BTC::Coin::BCH;
      const auto rsi = bitcoindmgr->getRpcSupportInfo();

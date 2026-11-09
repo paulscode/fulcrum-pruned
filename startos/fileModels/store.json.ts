@@ -28,5 +28,10 @@ export const storeJson = FileHelper.json(
      * to offer.
      */
     indexesChangedAt: z.number().optional().catch(undefined),
+    /**
+     * Whether db_mem is the package's to adjust (more while an index builds, less once built). Cleared
+     * when the user enters a value in Configure, set again when they clear the field.
+     */
+    dbMemAuto: z.boolean().catch(true),
   }),
 )

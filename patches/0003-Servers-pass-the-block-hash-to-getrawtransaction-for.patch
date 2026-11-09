@@ -1,4 +1,4 @@
-From 813a8ac68e98c0ef71186045a0890c12ab4ce623 Mon Sep 17 00:00:00 2001
+From 921cde8fbe857f1bb216756a12f13f48db69fbac Mon Sep 17 00:00:00 2001
 From: Paul Lamb <paul@paulscode.com>
 Date: Sun, 8 Nov 2026 14:35:35 -0600
 Subject: [PATCH 3/5] Servers: pass the block hash to getrawtransaction for an
@@ -35,13 +35,19 @@ bdThrottleCount. The lookup never throws, so the count is always undone.
 The reply is relayed only if it is the transaction asked for (txid of the
 raw hex, or the verbose txid): with a block hash it can come from a block
 fetched from peers through a proxy.
+
+A lookup that names a block gets the operator's bitcoind_timeout rather
+than the fixed 15 s Fulcrum gives every client-originated request: on a
+pruned node the block may be fetched from peers, which can take longer
+(up to 40 s measured on a live server with Tor and I2P peers). Shown on
+regtest with a relay holding each such request for 20 s.
 ---
- src/Servers.cpp | 132 +++++++++++++++++++++++++++++++++++++++---------
- src/Servers.h   |  10 +++-
- 2 files changed, 117 insertions(+), 25 deletions(-)
+ src/Servers.cpp | 139 +++++++++++++++++++++++++++++++++++++++---------
+ src/Servers.h   |  11 +++-
+ 2 files changed, 124 insertions(+), 26 deletions(-)
 
 diff --git a/src/Servers.cpp b/src/Servers.cpp
-index 7e55386..e294b7d 100644
+index 7e55386..34d311e 100644
 --- a/src/Servers.cpp
 +++ b/src/Servers.cpp
 @@ -327,7 +327,7 @@ namespace {
@@ -95,7 +101,7 @@ index 7e55386..e294b7d 100644
      {
          const int bdReqHi = options->bdReqThrottleParams.load().hi;
          ++c->perIPData->bdReqCtr; // increase bitcoind request counter (per-IP, owned by multiple threads)
-@@ -889,6 +890,29 @@ void ServerBase::generic_async_to_bitcoind(Client *c, const RPC::BatchId batchId
+@@ -889,6 +890,30 @@ void ServerBase::generic_async_to_bitcoind(Client *c, const RPC::BatchId batchId
          }
      }
      // /Throttling support
@@ -113,7 +119,8 @@ index 7e55386..e294b7d 100644
 +                                           const BitcoinDSuccessFunc & successFunc,
 +                                           const BitcoinDErrorFunc & errorFunc,
 +                                           std::optional<int> useCacheIfNotOlderThan,
-+                                           bool alreadyCounted)
++                                           bool alreadyCounted,
++                                           int timeoutMS)
 +{
 +    if (QThread::currentThread() != c->thread()) [[unlikely]] {
 +        // Paranoia, in case I or a future programmer forgets this rule.
@@ -125,7 +132,16 @@ index 7e55386..e294b7d 100644
      bitcoindmgr->submitRequest(c, newId(), method, params,
          // success
          [c, batchId, reqId, successFunc](const RPC::Message & reply) {
-@@ -2279,18 +2303,78 @@ void Server::rpc_blockchain_transaction_get(Client *c, const RPC::BatchId batchI
+@@ -934,7 +959,7 @@ void ServerBase::generic_async_to_bitcoind(Client *c, const RPC::BatchId batchId
+         // use default function on failure, sends json rpc error "internal error: <message>"
+         defaultBDFailFunc(c, batchId, reqId),
+         // timeout
+-        BitcoinDMgr::kDefaultTimeoutMS,
++        timeoutMS > 0 ? timeoutMS : BitcoinDMgr::kDefaultTimeoutMS,
+         // optional response caching control
+         useCacheIfNotOlderThan
+     );
+@@ -2279,18 +2304,82 @@ void Server::rpc_blockchain_transaction_get(Client *c, const RPC::BatchId batchI
              throw RPCError("Invalid verbose argument; expected boolean");
          verbose = verbArg;
      }
@@ -205,7 +221,11 @@ index 7e55386..e294b7d 100644
 +                    throw RPCError(formatBitcoinDErrorResponseToLookLikeDumbElectrumXPythonRepr(errResponse),
 +                                   RPC::Code_App_DaemonError);
 +                },
-+                std::nullopt, /* alreadyCounted = */ true
++                std::nullopt, /* alreadyCounted = */ true,
++                // With a block hash, a block the node has pruned is fetched from peers through the proxy, which
++                // can take far longer than the 15 s client requests get (over Tor especially), so allow what the
++                // operator configured for the node (bitcoind_timeout). A mempool lookup keeps the default.
++                blockHashHex.isEmpty() ? 0 : options->bdTimeoutMS
 +            );
          }
      );
@@ -215,16 +235,17 @@ index 7e55386..e294b7d 100644
  void Server::rpc_blockchain_transaction_get_confirmed_blockhash(Client *c, const RPC::BatchId batchId, const RPC::Message &m)
  {
 diff --git a/src/Servers.h b/src/Servers.h
-index 48b1f77..4520e85 100644
+index 48b1f77..3ee6439 100644
 --- a/src/Servers.h
 +++ b/src/Servers.h
-@@ -301,7 +301,15 @@ protected:
+@@ -301,7 +301,16 @@ protected:
                                     const QVariantList &params, ///< params for bitcoind method
                                     const BitcoinDSuccessFunc & successFunc,
                                     const BitcoinDErrorFunc & errorFunc = BitcoinDErrorFunc(),
 -                                   std::optional<int> useCacheIfNotOlderThan = std::nullopt);
 +                                   std::optional<int> useCacheIfNotOlderThan = std::nullopt,
-+                                   bool alreadyCounted = false); ///< true if the caller already called bdThrottleCount for this request
++                                   bool alreadyCounted = false, ///< true if the caller already called bdThrottleCount for this request
++                                   int timeoutMS = 0); ///< 0: BitcoinDMgr::kDefaultTimeoutMS
 +
 +    /// Counts one bitcoind request against the client's throttle, pausing reads from it at the hi-water mark.
 +    /// generic_async_to_bitcoind does this itself; a handler that does other work first (on a thread pool) calls it

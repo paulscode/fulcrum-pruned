@@ -33,7 +33,11 @@ const formatGB = (bytes: number) => `${(bytes / 1e9).toFixed(1)} GB`
  * Every database on the volume except the selected node's: those of nodes indexed before, and
  * any the chain guard set aside (`<node>.wrong-chain-<time>`).
  */
-async function unusedIndexes(effects: T.Effects, reactive = false) {
+async function unusedIndexes(
+  effects: T.Effects,
+  reactive = false,
+  withSizes = true,
+) {
   // Reactive in the action's metadata: the SDK re-evaluates that only when something it read with
   // .const() changes. Read once, it was computed at install (no other indexes yet) and the action
   // stayed disabled for good. Following the whole store re-evaluates it whenever an index can
@@ -48,7 +52,8 @@ async function unusedIndexes(effects: T.Effects, reactive = false) {
   const out: { name: string; label: string }[] = []
   for (const e of entries) {
     if (!e.isDirectory() || e.name === selected) continue
-    const size = formatGB(await sizeOf(dbDirOnVolume(e.name)))
+    // Sizes only for the form: deciding whether to show the action must not walk ~190 GB indexes.
+    const size = withSizes ? formatGB(await sizeOf(dbDirOnVolume(e.name))) : ''
     const label = isBackendId(e.name)
       ? `${backends[e.name].title} (${size})`
       : `${e.name} (${size})`
@@ -82,7 +87,7 @@ export const deleteUnusedIndexes = sdk.Action.withInput(
     allowedStatuses: 'any',
     group: null,
     visibility:
-      (await unusedIndexes(effects, true)).length > 0
+      (await unusedIndexes(effects, true, false)).length > 0
         ? 'enabled'
         : { disabled: i18n('There are no unused indexes') },
   }),

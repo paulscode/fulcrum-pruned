@@ -10,6 +10,7 @@ import {
   fulcrumConf,
 } from '../fileModels/fulcrum.conf'
 import { bannerTxt } from '../fileModels/banner.txt'
+import { storeJson } from '../fileModels/store.json'
 
 const { InputSpec, Value } = sdk
 
@@ -29,7 +30,7 @@ const inputSpec = InputSpec.of({
   bitcoind_timeout: Value.number({
     name: i18n('Bitcoin RPC Timeout (seconds)'),
     description: i18n(
-      'How long Fulcrum waits for any one answer from the node. On a pruned node, a block the node has discarded is fetched from the network first, which can take a while, especially over Tor. Raise this if the logs show "bitcoind request timed out" or the index build keeps restarting.',
+      'How long Fulcrum waits for the node when a wallet looks up a transaction in a block the node has discarded, which is fetched from the network first and can take a while, especially over Tor. Raise this if wallets report "bitcoind request timed out" for old transactions.',
     ),
     required: false,
     default: null,
@@ -138,6 +139,14 @@ export const configure = sdk.Action.withInput(
     } else {
       await rm(bannerTxt.path, { force: true })
     }
+    // A value entered here is the user's and is never adjusted; a cleared field hands db_mem back to
+    // the package, which uses more while an index builds and less once it is built. Compared with
+    // the value before this save, so resubmitting the form unchanged changes nothing.
+    const before = (await fulcrumConf.read((c) => c.db_mem).once()) ?? null
+    if (conf.db_mem === null || conf.db_mem === undefined)
+      await storeJson.merge(effects, { dbMemAuto: true })
+    else if (conf.db_mem !== before)
+      await storeJson.merge(effects, { dbMemAuto: false })
     // A cleared field goes back to this package's default, which its footnote shows, not to
     // Fulcrum's own: Fulcrum's 30 s timeout and 3 clients are what the seeded values exist to avoid
     // on a pruned node.

@@ -5,7 +5,7 @@ const dict = {
   'Custom banner text displayed to connecting Electrum clients. Leave empty to use the Fulcrum default banner.': 1,
   'ASCII art welcome! Variables like $SERVER_VERSION are supported.': 2,
   'Bitcoin RPC Timeout (seconds)': 3,
-  'How long Fulcrum waits for any one answer from the node. On a pruned node, a block the node has discarded is fetched from the network first, which can take a while, especially over Tor. Raise this if the logs show "bitcoind request timed out" or the index build keeps restarting.': 4,
+  'How long Fulcrum waits for the node when a wallet looks up a transaction in a block the node has discarded, which is fetched from the network first and can take a while, especially over Tor. Raise this if wallets report "bitcoind request timed out" for old transactions.': 4,
   Default: 5,
   'Bitcoin RPC Clients': 6,
   "How many requests Fulcrum keeps open to the node while it builds its index. On a pruned node, blocks it has discarded are fetched from the network one by one, slowly, so more requests at once build the index faster. Each also counts against the node's RPC work queue (64 by default), so keep the total (this plus one, times the CPU cores) at or below about 32.": 7,

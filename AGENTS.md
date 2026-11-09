@@ -61,5 +61,11 @@ project folder `/mnt/Black/fulcrum-pruned` (`internal_docs/`, not published).
   dependency's lock entry is copied by hand from a sibling package.
 - **i18n is en_US only**, so `gen-i18n-dict.py` (in the workspace) may regenerate `default.ts`.
   Once `translations.ts` has entries, the indices are the join key and must be kept.
+- **Never `git push --tags`.** The repository carries privkeyio's and Start9's fulcrum-startos tags
+  (`v2.1.4-blake_0`, `v2.1.3_0`, ...) from its history; pushed, they would read as releases of this
+  package. `release.sh --publish` creates the one tag a release needs.
+- **The New Package Checklist named above is not in this workspace's copy of the guide**; its
+  pre-publish checklists are in `publishing.md`, `writing-readmes.md` and `writing-instructions.md`
+  under `../start-technologies/projects/start-sdk/docs/src/`.
 - **Build with the workspace's `release.sh`** (`../release.sh fulcrum-pruned-startos --arch x86`
   for iteration), which refuses an `osVersion` below 0.4.0.2. Releases are local, never CI.

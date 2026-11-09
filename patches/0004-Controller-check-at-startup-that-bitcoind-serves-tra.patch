@@ -1,4 +1,4 @@
-From 4413f8b045a88aa47dbbeeedcb4411c7c2b0f989 Mon Sep 17 00:00:00 2001
+From e06d3ceccf2b385e1b2e689ef4c8c6aed3813e3e Mon Sep 17 00:00:00 2001
 From: Paul Lamb <paul@paulscode.com>
 Date: Sun, 8 Nov 2026 14:36:21 -0600
 Subject: [PATCH 4/5] Controller: check at startup that bitcoind serves
@@ -18,12 +18,15 @@ pruned node's RPC port. An archival node answers it with or without
 
 Three failures and it stops asking until restart, rather than a fetch
 from peers and the banner on every block.
+
+It also uses bitcoind_timeout, and counts a timeout towards the three,
+not only an error reply.
 ---
- src/Controller.cpp | 40 ++++++++++++++++++++++++++++------------
- 1 file changed, 28 insertions(+), 12 deletions(-)
+ src/Controller.cpp | 48 +++++++++++++++++++++++++++++++++-------------
+ 1 file changed, 35 insertions(+), 13 deletions(-)
 
 diff --git a/src/Controller.cpp b/src/Controller.cpp
-index ebf75d8..6e9520e 100644
+index ebf75d8..7bb2dbe 100644
 --- a/src/Controller.cpp
 +++ b/src/Controller.cpp
 @@ -213,14 +213,21 @@ void Controller::startup()
@@ -53,7 +56,7 @@ index ebf75d8..6e9520e 100644
          auto onSuccess = [this, connPtr2, hash=*optHash] (const RPC::Message &resp) {
              bitcoin::CMutableTransaction tx;
              constexpr auto kErrLine2 = "Something is wrong with either BitcoinD or our ability to understand its RPC responses.";
-@@ -236,23 +243,32 @@ void Controller::startup()
+@@ -236,23 +243,38 @@ void Controller::startup()
                  Error() << kErrLine2;
                  return;
              }
@@ -82,14 +85,21 @@ index ebf75d8..6e9520e 100644
 +                disconnect(*connPtr2);
 +            }
          };
-         auto onFail = [] (RPC::Message::Id, const QString &errMsg) {
+-        auto onFail = [] (RPC::Message::Id, const QString &errMsg) {
 -            Warning() << "Unable to verify that BitcoinD is using txindex. Error: " << errMsg;
++        auto onFail = [this, connPtr2, failures] (RPC::Message::Id, const QString &errMsg) {
 +            Warning() << "Unable to verify that BitcoinD can serve transactions by block hash. Error: " << errMsg;
++            // A timeout counts too: a proxy too slow to answer is asked again on every block otherwise.
++            if (++*failures >= 3) {
++                Warning() << "Not checking again until Fulcrum restarts.";
++                disconnect(*connPtr2);
++            }
          };
 -        // ask bitcoind for tx #1 (first tx after genesis) to ensure it has txindex enabled.
 -        bitcoindmgr->submitRequest(this, IdMixin::newId(), "getrawtransaction", {Util::ToHexFast(*optHash), false}, onSuccess, onError, onFail);
 +        // ask bitcoind for tx #1 (first tx after genesis), naming its block
-+        bitcoindmgr->submitRequest(this, IdMixin::newId(), "getrawtransaction", {Util::ToHexFast(*optHash), false, blockHashHex}, onSuccess, onError, onFail);
++        bitcoindmgr->submitRequest(this, IdMixin::newId(), "getrawtransaction", {Util::ToHexFast(*optHash), false, blockHashHex}, onSuccess, onError, onFail,
++                                   options->bdTimeoutMS); // block 1 comes from peers on a pruned node; allow for it
      }, Qt::QueuedConnection);
  
      {

@@ -4,7 +4,8 @@ import { long, short } from './i18n'
 export const manifest = setupManifest({
   id: 'fulcrum-pruned',
   title: 'Fulcrum Pruned',
-  license: 'MIT',
+  // Fulcrum's own license, which LICENSE ships; the binary is GPLv3.
+  license: 'GPL-3.0',
   packageRepo: 'https://github.com/paulscode/fulcrum-pruned',
   upstreamRepo: 'https://github.com/cculianu/Fulcrum',
   marketingUrl: 'https://github.com/cculianu/Fulcrum',

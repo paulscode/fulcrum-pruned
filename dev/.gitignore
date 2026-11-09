@@ -1,29 +1,10 @@
-# Internal planning docs, not published
-internal_docs/
-references/
-
-# Upstream and reference checkouts (Fulcrum upstream, privkeyio's BLAKE2b fork, the packages)
-vendor/
-
-# The StartOS packaging workspace; the package is its own repository inside it
-packaging/
-
-# Scratch and test-run state
-spikes/**/data/
-spikes/**/*.log
-spikes/**/*.pid
-*.log
-
-# Build output
-*.s9pk
-build/
-node_modules/
-javascript/
-
-# Patch working tree (a git worktree of vendor/Fulcrum-blake2b, branch `pruned`) and its builds
+# Patch working tree: a git worktree of a privkeyio/Fulcrum clone, branch `pruned` (UPDATING.md)
 spikes/fulcrum-src/
+# Its builds (build.sh, build.sh test) and their ccache
 spikes/build*/
-# Regtest harness state
+spikes/test-all.log
+
+# Regtest harness state (setup.sh up / fulcrum / clean)
 spikes/harness/node*/
 spikes/harness/fulcrum-db/
 spikes/harness/fulcrum.conf
@@ -31,3 +12,5 @@ spikes/harness/proxy.toml
 spikes/harness/txs.json
 spikes/harness/chain
 spikes/harness/activation
+spikes/**/*.log
+spikes/**/*.pid
