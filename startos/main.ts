@@ -5,7 +5,7 @@ import { availableParallelism, totalmem } from 'os'
 import { StringDecoder } from 'string_decoder'
 import { manifest as bitcoinManifest } from 'bitcoin-core-startos/startos/manifest'
 import { BackendId, backends, defaultBackend, isBackendId } from './backends'
-import { bounded, unanswered } from './boundedCheck'
+import { bounded, unanswered } from './utils'
 import { forgetChain, guardChain, stampChain } from './chainGuard'
 import {
   defaultDbMem,

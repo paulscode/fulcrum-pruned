@@ -171,7 +171,7 @@ The ids match the official Fulcrum package; dependents gate on them. A **Sync Co
 is sent once per node when its index first completes; **Index set aside** when the chain guard moves
 an index from another chain; **Index rebuilt** when an unreadable index is deleted.
 
-Both checks go through `startos/boundedCheck.ts`. start-sdk awaits a check's run with no limit, and
+Both checks go through `bounded` in `startos/utils.ts`. start-sdk awaits a check's run with no limit, and
 a stop waits for every check to end ("Electrum (SSL)" before Fulcrum is signalled), so one run that
 never returned (the cookie test's subcontainer `exec` waiting on its mounts) would hold up Stop,
 updates and restarts, as it did in Bitcoin Knots (BLAKE2b) Companion before 29.5.0:1. A run still
