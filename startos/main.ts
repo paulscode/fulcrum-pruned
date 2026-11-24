@@ -5,6 +5,7 @@ import { availableParallelism, totalmem } from 'os'
 import { StringDecoder } from 'string_decoder'
 import { manifest as bitcoinManifest } from 'bitcoin-core-startos/startos/manifest'
 import { BackendId, backends, defaultBackend, isBackendId } from './backends'
+import { bounded, unanswered } from './boundedCheck'
 import { forgetChain, guardChain, stampChain } from './chainGuard'
 import {
   defaultDbMem,
@@ -403,7 +404,7 @@ exec Fulcrum --ts-format none /data/fulcrum.conf`,
       },
       ready: {
         display: i18n('Electrum (SSL)'),
-        fn: async () => {
+        fn: bounded(async () => {
           if (await fulcrumListening()) {
             return {
               result: 'success',
@@ -435,14 +436,14 @@ exec Fulcrum --ts-format none /data/fulcrum.conf`,
             result: 'starting',
             message: i18n('Fulcrum is starting'),
           }
-        },
+        }, unanswered),
       },
       requires: [],
     })
     .addHealthCheck('sync-progress', {
       ready: {
         display: i18n('Sync Progress'),
-        fn: async () => {
+        fn: bounded(async () => {
           if (await fulcrumListening()) {
             return { result: 'success', message: i18n('Fulcrum is synced') }
           }
@@ -484,7 +485,7 @@ exec Fulcrum --ts-format none /data/fulcrum.conf`,
             message: lastSyncLog ?? i18n('Fulcrum is starting'),
             result: 'loading',
           }
-        },
+        }, unanswered),
       },
       requires: [],
     })

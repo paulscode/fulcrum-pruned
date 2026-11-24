@@ -59,6 +59,7 @@ const dict = {
   'Sync Complete': 55,
   'Fulcrum has finished building its address index for ${node}. It is restarting once to apply a lower database memory setting, after which the Electrum server is ready.': 56,
   'Fulcrum has finished building its address index for ${node}. The Electrum server is ready.': 57,
+  'This check has not finished after a minute': 58,
 }
 
 /**
